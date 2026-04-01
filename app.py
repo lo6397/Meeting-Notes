@@ -1,24 +1,10 @@
 import os
 import json
-from datetime import datetime
+import re
 from flask import Flask, render_template_string, request, jsonify
 import anthropic
 
 app = Flask(__name__)
-
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "meetings.json")
-
-
-def load_meetings():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return []
-
-
-def save_meetings(meetings):
-    with open(DATA_FILE, "w") as f:
-        json.dump(meetings, f, indent=2)
 
 
 TEMPLATE = r"""
@@ -182,35 +168,7 @@ TEMPLATE = r"""
   <div class="history">
     <h2>Past Meetings</h2>
     <div id="historyList">
-      {% if meetings %}
-        {% for m in meetings|reverse %}
-        <div class="history-card" onclick="this.querySelector('.expanded').classList.toggle('show')">
-          <h3>{{ m.title }}</h3>
-          <div class="meta">{{ m.date }}</div>
-          <div class="preview">{{ m.transcript[:120] }}{% if m.transcript|length > 120 %}...{% endif %}</div>
-          <div class="expanded">
-            <div class="section">
-              <h4>Full Transcript</h4>
-              <div class="section-body">{{ m.transcript }}</div>
-            </div>
-            {% if m.summary %}
-            <div class="section">
-              <h4>Summary</h4>
-              <div class="section-body">{{ m.summary }}</div>
-            </div>
-            {% endif %}
-            {% if m.action_items %}
-            <div class="section">
-              <h4>Action Items</h4>
-              <ul>{% for item in m.action_items %}<li>{{ item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-          </div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="empty">No meetings recorded yet.</div>
-      {% endif %}
+      <div class="empty">No meetings recorded yet.</div>
     </div>
   </div>
 </div>
@@ -221,22 +179,79 @@ let isRecording = false;
 let fullTranscript = '';
 let interimText = '';
 
-// Persist API key in localStorage
-const STORAGE_KEY = 'anthropic_api_key';
+const API_KEY_STORAGE = 'anthropic_api_key';
+const MEETINGS_STORAGE = 'meeting_notes_history';
+
+// --- localStorage helpers ---
+function loadMeetingsFromStorage() {
+  try { return JSON.parse(localStorage.getItem(MEETINGS_STORAGE)) || []; }
+  catch { return []; }
+}
+
+function saveMeetingToStorage(meeting) {
+  const meetings = loadMeetingsFromStorage();
+  meetings.push(meeting);
+  localStorage.setItem(MEETINGS_STORAGE, JSON.stringify(meetings));
+  renderHistory();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function renderHistory() {
+  const meetings = loadMeetingsFromStorage();
+  const container = document.getElementById('historyList');
+  if (!meetings.length) {
+    container.innerHTML = '<div class="empty">No meetings recorded yet.</div>';
+    return;
+  }
+  let html = '';
+  for (let i = meetings.length - 1; i >= 0; i--) {
+    const m = meetings[i];
+    const preview = m.transcript ? escapeHtml(m.transcript.substring(0, 120)) + (m.transcript.length > 120 ? '...' : '') : '';
+    html += '<div class="history-card" onclick="this.querySelector(\'.expanded\').classList.toggle(\'show\')">';
+    html += '<h3>' + escapeHtml(m.title) + '</h3>';
+    html += '<div class="meta">' + escapeHtml(m.date) + '</div>';
+    html += '<div class="preview">' + preview + '</div>';
+    html += '<div class="expanded">';
+    if (m.transcript) {
+      html += '<div class="section"><h4>Full Transcript</h4><div class="section-body">' + escapeHtml(m.transcript) + '</div></div>';
+    }
+    if (m.summary) {
+      html += '<div class="section"><h4>Summary</h4><div class="section-body">' + escapeHtml(m.summary) + '</div></div>';
+    }
+    if (m.action_items && m.action_items.length) {
+      html += '<div class="section"><h4>Action Items</h4><ul>';
+      m.action_items.forEach(item => { html += '<li>' + escapeHtml(item) + '</li>'; });
+      html += '</ul></div>';
+    }
+    html += '</div></div>';
+  }
+  container.innerHTML = html;
+}
+
+// --- Init ---
 window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem(STORAGE_KEY) || '';
-  document.getElementById('recApiKey').value = saved;
-  document.getElementById('pasteApiKey').value = saved;
+  // Restore API key
+  const savedKey = localStorage.getItem(API_KEY_STORAGE) || '';
+  document.getElementById('recApiKey').value = savedKey;
+  document.getElementById('pasteApiKey').value = savedKey;
   document.getElementById('recApiKey').addEventListener('input', (e) => {
-    localStorage.setItem(STORAGE_KEY, e.target.value);
+    localStorage.setItem(API_KEY_STORAGE, e.target.value);
     document.getElementById('pasteApiKey').value = e.target.value;
   });
   document.getElementById('pasteApiKey').addEventListener('input', (e) => {
-    localStorage.setItem(STORAGE_KEY, e.target.value);
+    localStorage.setItem(API_KEY_STORAGE, e.target.value);
     document.getElementById('recApiKey').value = e.target.value;
   });
+  // Render saved meetings
+  renderHistory();
 });
 
+// --- Tabs ---
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
     b.classList.toggle('active', (tab === 'record' && i === 0) || (tab === 'paste' && i === 1));
@@ -245,6 +260,7 @@ function switchTab(tab) {
   document.getElementById('tab-paste').classList.toggle('active', tab === 'paste');
 }
 
+// --- Recording ---
 function toggleRecording() {
   if (isRecording) { stopRecording(); return; }
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -309,6 +325,7 @@ function stopRecording() {
   document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
 }
 
+// --- Summarize ---
 async function callSummarize(transcript, title, apiKey, resultDiv, tabId) {
   if (!transcript.trim()) { resultDiv.innerHTML = '<p class="error">No transcript to summarize.</p>'; return; }
   if (!apiKey.trim()) { resultDiv.innerHTML = '<p class="error">Please enter your Anthropic API key.</p>'; return; }
@@ -324,13 +341,22 @@ async function callSummarize(transcript, title, apiKey, resultDiv, tabId) {
     const data = await resp.json();
     if (data.error) { resultDiv.innerHTML = '<p class="error">' + data.error + '</p>'; return; }
 
-    let html = '<div class="result-card"><h3>' + (data.title || title || 'Meeting') + '</h3>';
+    // Save to localStorage
+    saveMeetingToStorage({
+      title: data.title || title || 'Untitled Meeting',
+      transcript: transcript,
+      summary: data.summary || '',
+      action_items: data.action_items || [],
+      date: new Date().toLocaleString()
+    });
+
+    let html = '<div class="result-card"><h3>' + escapeHtml(data.title || title || 'Meeting') + '</h3>';
     if (data.summary) {
-      html += '<div class="section"><h4>Summary</h4><div class="section-body">' + data.summary + '</div></div>';
+      html += '<div class="section"><h4>Summary</h4><div class="section-body">' + escapeHtml(data.summary) + '</div></div>';
     }
     if (data.action_items && data.action_items.length) {
       html += '<div class="section"><h4>Action Items</h4><ul>';
-      data.action_items.forEach(item => { html += '<li>' + item + '</li>'; });
+      data.action_items.forEach(item => { html += '<li>' + escapeHtml(item) + '</li>'; });
       html += '</ul></div>';
     }
     html += '</div>';
@@ -378,8 +404,7 @@ function summarizePaste() {
 
 @app.route("/")
 def index():
-    meetings = load_meetings()
-    return render_template_string(TEMPLATE, meetings=meetings)
+    return render_template_string(TEMPLATE)
 
 
 @app.route("/summarize", methods=["POST"])
@@ -422,7 +447,6 @@ def summarize():
             result = json.loads(response_text)
         except json.JSONDecodeError:
             # Try to extract JSON from markdown code block
-            import re
             match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
             if match:
                 result = json.loads(match.group(1))
@@ -431,17 +455,6 @@ def summarize():
 
         summary = result.get("summary", "")
         action_items = result.get("action_items", [])
-
-        # Save to history
-        meetings = load_meetings()
-        meetings.append({
-            "title": title,
-            "transcript": transcript,
-            "summary": summary,
-            "action_items": action_items,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        })
-        save_meetings(meetings)
 
         return jsonify({
             "title": title,
@@ -453,11 +466,6 @@ def summarize():
         return jsonify({"error": "Invalid API key."}), 401
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/meetings", methods=["GET"])
-def api_meetings():
-    return jsonify(load_meetings())
 
 
 if __name__ == "__main__":
