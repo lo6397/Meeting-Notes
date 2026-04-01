@@ -24,7 +24,15 @@ HTML = """
 </style>
 </head>
 <body>
-<h1>Meeting Recorder</h1>
+<div style="position:relative">
+  <h1>Meeting Recorder</h1>
+  <button onclick="document.getElementById('settings').style.display=document.getElementById('settings').style.display==='none'?'block':'none'" style="position:absolute;top:0;right:0;background:none;border:none;font-size:22px;cursor:pointer;padding:8px" title="Settings">&#9881;</button>
+</div>
+<div id="settings" class="card" style="display:none">
+  <label style="font-weight:600;font-size:14px">Anthropic API Key</label>
+  <input type="password" id="apiKey" placeholder="sk-ant-..." style="width:100%;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;margin-top:4px" />
+  <p style="font-size:12px;color:#888;margin-top:4px">Saved in your browser. Sent only to this server for summarization.</p>
+</div>
 <div class="card">
   <input type="text" id="title" placeholder="Meeting title (e.g. Weekly Standup)" />
   <div>
@@ -48,6 +56,11 @@ HTML = """
 <script>
 let recognition;
 let isRecording = false;
+
+// API key persistence
+const keyInput = document.getElementById('apiKey');
+keyInput.value = localStorage.getItem('anthropic_api_key') || '';
+keyInput.addEventListener('input', () => localStorage.setItem('anthropic_api_key', keyInput.value));
 
 function startRecording() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -100,7 +113,7 @@ async function summarize() {
   const res = await fetch('/summarize', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ transcript })
+    body: JSON.stringify({ transcript, api_key: localStorage.getItem('anthropic_api_key') || '' })
   });
   const data = await res.json();
   if (data.error) { document.getElementById('error').textContent = data.error; return; }
@@ -126,11 +139,12 @@ def summarize():
     from flask import request, jsonify
     data = request.json
     transcript = data.get('transcript', '')
-    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    api_key = data.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
+    print("API KEY SOURCE:", "request" if data.get('api_key') else "env")
     print("API KEY EXISTS:", bool(api_key))
     print("API KEY LENGTH:", len(api_key))
     if not api_key:
-        return jsonify({'error': 'ANTHROPIC_API_KEY not set'}), 400
+        return jsonify({'error': 'No API key. Click the gear icon to enter your Anthropic API key.'}), 400
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
