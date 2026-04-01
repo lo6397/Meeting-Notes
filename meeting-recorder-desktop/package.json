@@ -1,0 +1,26 @@
+{
+  "name": "meeting-recorder",
+  "version": "1.0.0",
+  "description": "Desktop meeting recorder with AI summarization",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.meeting-recorder.app",
+    "productName": "Meeting Recorder",
+    "files": [
+      "main.js",
+      "index.html",
+      "node_modules/**/*"
+    ]
+  }
+}

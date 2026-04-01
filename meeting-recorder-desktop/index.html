@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Meeting Recorder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f5; color: #1a1a2e; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 4px; font-size: 1.6rem; }
+  .subtitle { text-align: center; color: #888; margin-bottom: 20px; font-size: 0.85rem; }
+
+  .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 16px;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+
+  label { display: block; font-weight: 600; margin-bottom: 4px; margin-top: 12px; font-size: 0.9rem; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 9px; font-size: 14px; border: 1px solid #ddd;
+    border-radius: 6px; font-family: inherit; }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .btn { padding: 9px 20px; border: none; border-radius: 6px; font-size: 14px;
+         font-weight: 600; cursor: pointer; }
+  .btn-record { background: #dc3535; color: white; }
+  .btn-record:hover { background: #b82e2e; }
+  .btn-record.recording { animation: pulse 1.2s infinite; }
+  .btn-stop { background: #555; color: white; }
+  .btn-stop:hover { background: #333; }
+  .btn-stop:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-summarize { background: #1a4fa3; color: white; margin-top: 12px; }
+  .btn-summarize:hover { background: #153d80; }
+  .btn-summarize:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-new { background: #28a745; color: white; margin-top: 12px; }
+  .btn-new:hover { background: #1e7e34; }
+  .btn-settings { background: #6c757d; color: white; font-size: 12px; padding: 6px 14px; }
+  .btn-settings:hover { background: #545b62; }
+  .btn-save { background: #28a745; color: white; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  .status { font-size: 0.85rem; color: #888; margin-left: 8px; }
+  .status.live { color: #dc3535; font-weight: 600; }
+
+  textarea { width: 100%; height: 180px; padding: 10px; font-size: 13px; border: 1px solid #ddd;
+             border-radius: 6px; margin-top: 8px; font-family: inherit; resize: vertical; }
+
+  .error { color: #dc3535; font-size: 0.85rem; margin-top: 6px; }
+
+  /* Results */
+  .result { margin-top: 16px; padding: 16px; background: #f0f4ff; border: 1px solid #d0daf5;
+            border-radius: 8px; display: none; }
+  .result h3 { color: #1a4fa3; margin-bottom: 6px; font-size: 1rem; }
+  .result p { font-size: 0.9rem; line-height: 1.5; margin-bottom: 12px; }
+  .result ul { margin-left: 20px; font-size: 0.9rem; }
+  .result li { margin-bottom: 4px; }
+
+  /* Settings modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+                   z-index: 100; justify-content: center; align-items: center; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: white; border-radius: 10px; padding: 24px; width: 440px;
+           box-shadow: 0 8px 30px rgba(0,0,0,0.15); }
+  .modal h2 { margin-bottom: 12px; font-size: 1.1rem; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+  /* History */
+  .history h2 { margin-bottom: 10px; font-size: 1.15rem; }
+  .meeting-item { background: white; border-radius: 8px; padding: 14px; margin-bottom: 8px;
+                  box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: pointer; }
+  .meeting-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  .meeting-item h4 { margin-bottom: 2px; }
+  .meeting-item .date { font-size: 0.8rem; color: #888; }
+  .meeting-item .preview { font-size: 0.85rem; color: #555; margin-top: 4px; }
+  .meeting-detail { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;
+                    font-size: 0.85rem; }
+  .meeting-detail.show { display: block; }
+  .meeting-detail h5 { color: #1a4fa3; margin: 8px 0 4px; }
+  .meeting-detail pre { white-space: pre-wrap; font-family: inherit; }
+  .empty { text-align: center; color: #999; padding: 20px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+  <div>
+    <h1 style="text-align:left; margin:0;">Meeting Recorder</h1>
+    <p class="subtitle" style="text-align:left; margin:0;">Record, transcribe, and summarize with AI</p>
+  </div>
+  <button class="btn btn-settings" onclick="openSettings()">Settings</button>
+</div>
+
+<!-- Record card -->
+<div class="card">
+  <label for="title">Meeting Title</label>
+  <input type="text" id="title" placeholder="e.g. Weekly Standup">
+
+  <div class="controls">
+    <button class="btn btn-record" id="recBtn" onclick="toggleRecording()">Start Recording</button>
+    <button class="btn btn-stop" id="stopBtn" onclick="stopRecording()" disabled>Stop</button>
+    <span class="status" id="status">Ready</span>
+  </div>
+
+  <textarea id="transcript" placeholder="Transcript will appear here..."></textarea>
+  <div class="error" id="error"></div>
+
+  <button class="btn btn-summarize" id="sumBtn" onclick="doSummarize()" disabled>Summarize with AI</button>
+
+  <div class="result" id="result">
+    <h3>Summary</h3>
+    <p id="summaryText"></p>
+    <h3>Action Items</h3>
+    <ul id="actionList"></ul>
+    <button class="btn btn-new" onclick="resetForm()">New Recording</button>
+  </div>
+</div>
+
+<!-- Past meetings -->
+<div class="history">
+  <h2>Past Meetings</h2>
+  <div id="historyList"><div class="empty">No meetings yet.</div></div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <h2>Settings</h2>
+    <label for="apiKeyInput">Anthropic API Key</label>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-...">
+    <p style="font-size:0.8rem; color:#888; margin-top:4px;">Stored locally on your machine. Never sent anywhere except Anthropic.</p>
+    <div class="modal-actions">
+      <button class="btn btn-stop" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-save" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let recognition = null;
+let isRecording = false;
+
+// --- Settings ---
+async function openSettings() {
+  const s = await window.api.getSettings();
+  document.getElementById('apiKeyInput').value = s.anthropic_api_key || '';
+  document.getElementById('settingsModal').classList.add('show');
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('show');
+}
+
+async function saveApiKey() {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  await window.api.saveSettings({ anthropic_api_key: key });
+  closeSettings();
+}
+
+// --- History ---
+async function loadHistory() {
+  const meetings = await window.api.getMeetings();
+  const container = document.getElementById('historyList');
+  if (!meetings.length) {
+    container.innerHTML = '<div class="empty">No meetings yet.</div>';
+    return;
+  }
+  let html = '';
+  for (let i = meetings.length - 1; i >= 0; i--) {
+    const m = meetings[i];
+    const preview = m.transcript ? m.transcript.substring(0, 100) + (m.transcript.length > 100 ? '...' : '') : '';
+    html += '<div class="meeting-item" onclick="this.querySelector(\'.meeting-detail\').classList.toggle(\'show\')">';
+    html += '<h4>' + esc(m.title) + '</h4>';
+    html += '<div class="date">' + esc(m.date) + '</div>';
+    html += '<div class="preview">' + esc(preview) + '</div>';
+    html += '<div class="meeting-detail">';
+    html += '<h5>Transcript</h5><pre>' + esc(m.transcript) + '</pre>';
+    if (m.summary) html += '<h5>Summary</h5><pre>' + esc(m.summary) + '</pre>';
+    if (m.actions && m.actions.length) {
+      html += '<h5>Action Items</h5><ul>';
+      m.actions.forEach(a => { html += '<li>' + esc(a) + '</li>'; });
+      html += '</ul>';
+    }
+    html += '</div></div>';
+  }
+  container.innerHTML = html;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+// --- Recording ---
+function toggleRecording() {
+  if (isRecording) { stopRecording(); return; }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    document.getElementById('error').textContent = 'Speech recognition not available.';
+    return;
+  }
+
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  let fullText = '';
+
+  recognition.onstart = () => {
+    isRecording = true;
+    document.getElementById('recBtn').textContent = 'Recording...';
+    document.getElementById('recBtn').classList.add('recording');
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('status').textContent = 'Listening...';
+    document.getElementById('status').classList.add('live');
+    document.getElementById('error').textContent = '';
+  };
+
+  recognition.onresult = (e) => {
+    fullText = '';
+    for (let i = 0; i < e.results.length; i++) {
+      fullText += e.results[i][0].transcript + ' ';
+    }
+    document.getElementById('transcript').value = fullText;
+    document.getElementById('sumBtn').disabled = false;
+  };
+
+  recognition.onerror = (e) => {
+    if (e.error === 'aborted') return;
+    if (e.error === 'no-speech') return;
+    document.getElementById('error').textContent = 'Mic error: ' + e.error;
+  };
+
+  recognition.onend = () => {
+    if (isRecording) {
+      setTimeout(() => {
+        try { recognition.start(); } catch(e) {}
+      }, 100);
+    }
+  };
+
+  document.getElementById('transcript').value = '';
+  document.getElementById('sumBtn').disabled = true;
+  document.getElementById('result').style.display = 'none';
+  recognition.start();
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (recognition) recognition.abort();
+  document.getElementById('recBtn').textContent = 'Start Recording';
+  document.getElementById('recBtn').classList.remove('recording');
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('status').textContent = 'Stopped';
+  document.getElementById('status').classList.remove('live');
+}
+
+// --- Summarize ---
+async function doSummarize() {
+  const transcript = document.getElementById('transcript').value.trim();
+  const title = document.getElementById('title').value.trim() || 'Untitled Meeting';
+  if (!transcript) return;
+
+  document.getElementById('status').textContent = 'Summarizing...';
+  document.getElementById('sumBtn').disabled = true;
+  document.getElementById('error').textContent = '';
+
+  const data = await window.api.summarize({ transcript, title });
+
+  if (data.error) {
+    document.getElementById('error').textContent = data.error;
+    document.getElementById('status').textContent = '';
+    document.getElementById('sumBtn').disabled = false;
+    return;
+  }
+
+  document.getElementById('summaryText').textContent = data.summary;
+  const list = document.getElementById('actionList');
+  list.innerHTML = '';
+  (data.actions || []).forEach(a => {
+    const li = document.createElement('li');
+    li.textContent = a;
+    list.appendChild(li);
+  });
+
+  document.getElementById('result').style.display = 'block';
+  document.getElementById('status').textContent = '';
+  loadHistory();
+}
+
+// --- Reset ---
+function resetForm() {
+  document.getElementById('title').value = '';
+  document.getElementById('transcript').value = '';
+  document.getElementById('result').style.display = 'none';
+  document.getElementById('sumBtn').disabled = true;
+  document.getElementById('status').textContent = 'Ready';
+  document.getElementById('error').textContent = '';
+}
+
+// --- Init ---
+loadHistory();
+</script>
+</body>
+</html>
