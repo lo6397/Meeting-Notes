@@ -1,8 +1,10 @@
 import os
 import json
 import re
+import tempfile
 from flask import Flask, render_template_string, request, jsonify
 import anthropic
+import openai
 
 app = Flask(__name__)
 
@@ -65,7 +67,6 @@ TEMPLATE = r"""
                     margin-bottom: 1rem; }
   .transcript-box:empty::before { content: "Transcript will appear here...";
                                   color: #bbb; font-style: italic; }
-  .transcript-box .interim { color: #999; }
 
   /* Paste tab */
   textarea { width: 100%; min-height: 200px; resize: vertical; border: 1px solid #ddd;
@@ -190,47 +191,47 @@ TEMPLATE = r"""
 </div>
 
 <script>
-let recognition = null;
-let isRecording = false;
-let fullTranscript = '';
-let interimText = '';
-let audioCtx = null;
-let analyser = null;
-let micStream = null;
-let levelRAF = null;
+var mediaRecorder = null;
+var audioChunks = [];
+var micStream = null;
+var audioCtx = null;
+var analyser = null;
+var levelRAF = null;
+var fullTranscript = '';
+var isRecording = false;
 
-const MEETINGS_STORAGE = 'meeting_notes_history';
+var MEETINGS_STORAGE = 'meeting_notes_history';
 
 // --- localStorage helpers ---
 function loadMeetingsFromStorage() {
   try { return JSON.parse(localStorage.getItem(MEETINGS_STORAGE)) || []; }
-  catch { return []; }
+  catch(e) { return []; }
 }
 
 function saveMeetingToStorage(meeting) {
-  const meetings = loadMeetingsFromStorage();
+  var meetings = loadMeetingsFromStorage();
   meetings.push(meeting);
   localStorage.setItem(MEETINGS_STORAGE, JSON.stringify(meetings));
   renderHistory();
 }
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
+  var div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
 
 function renderHistory() {
-  const meetings = loadMeetingsFromStorage();
-  const container = document.getElementById('historyList');
+  var meetings = loadMeetingsFromStorage();
+  var container = document.getElementById('historyList');
   if (!meetings.length) {
     container.innerHTML = '<div class="empty">No meetings recorded yet.</div>';
     return;
   }
-  let html = '';
-  for (let i = meetings.length - 1; i >= 0; i--) {
-    const m = meetings[i];
-    const preview = m.transcript ? escapeHtml(m.transcript.substring(0, 120)) + (m.transcript.length > 120 ? '...' : '') : '';
+  var html = '';
+  for (var i = meetings.length - 1; i >= 0; i--) {
+    var m = meetings[i];
+    var preview = m.transcript ? escapeHtml(m.transcript.substring(0, 120)) + (m.transcript.length > 120 ? '...' : '') : '';
     html += '<div class="history-card" onclick="this.querySelector(\'.expanded\').classList.toggle(\'show\')">';
     html += '<h3>' + escapeHtml(m.title) + '</h3>';
     html += '<div class="meta">' + escapeHtml(m.date) + '</div>';
@@ -244,7 +245,7 @@ function renderHistory() {
     }
     if (m.action_items && m.action_items.length) {
       html += '<div class="section"><h4>Action Items</h4><ul>';
-      m.action_items.forEach(item => { html += '<li>' + escapeHtml(item) + '</li>'; });
+      m.action_items.forEach(function(item) { html += '<li>' + escapeHtml(item) + '</li>'; });
       html += '</ul></div>';
     }
     html += '</div></div>';
@@ -253,13 +254,13 @@ function renderHistory() {
 }
 
 // --- Init ---
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', function() {
   renderHistory();
 });
 
 // --- Tabs ---
 function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+  document.querySelectorAll('.tab-btn').forEach(function(b, i) {
     b.classList.toggle('active', (tab === 'record' && i === 0) || (tab === 'paste' && i === 1));
   });
   document.getElementById('tab-record').classList.toggle('active', tab === 'record');
@@ -271,19 +272,19 @@ function startLevelMeter(stream) {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 256;
-  const source = audioCtx.createMediaStreamSource(stream);
+  var source = audioCtx.createMediaStreamSource(stream);
   source.connect(analyser);
-  const data = new Uint8Array(analyser.frequencyBinCount);
-  const meter = document.getElementById('levelMeter');
-  const fill = document.getElementById('levelFill');
+  var data = new Uint8Array(analyser.frequencyBinCount);
+  var meter = document.getElementById('levelMeter');
+  var fill = document.getElementById('levelFill');
   meter.style.display = 'block';
 
   function tick() {
     analyser.getByteFrequencyData(data);
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) sum += data[i];
-    const avg = sum / data.length;
-    const pct = Math.min(100, (avg / 128) * 100);
+    var sum = 0;
+    for (var i = 0; i < data.length; i++) sum += data[i];
+    var avg = sum / data.length;
+    var pct = Math.min(100, (avg / 128) * 100);
     fill.style.width = pct + '%';
     levelRAF = requestAnimationFrame(tick);
   }
@@ -292,10 +293,9 @@ function startLevelMeter(stream) {
 
 function stopLevelMeter() {
   if (levelRAF) { cancelAnimationFrame(levelRAF); levelRAF = null; }
-  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  if (audioCtx) { audioCtx.close().catch(function() {}); audioCtx = null; }
   document.getElementById('levelFill').style.width = '0%';
   document.getElementById('levelMeter').style.display = 'none';
-  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
 }
 
 // --- Mic error display ---
@@ -308,22 +308,14 @@ function clearMicError() {
   document.getElementById('micError').innerHTML = '';
 }
 
-// --- Recording ---
+// --- Recording via MediaRecorder ---
 async function toggleRecording() {
   if (isRecording) { stopRecording(); return; }
 
-  if (!('webkitSpeechRecognition' in window)) {
-    showMicError('Browser not supported',
-      'This app requires Chrome (desktop or Android). webkitSpeechRecognition is not available in this browser.');
-    return;
-  }
-
   clearMicError();
 
-  // Request mic permission first so we get a clear error if denied
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    startLevelMeter(micStream);
   } catch (err) {
     if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
       showMicError('Microphone access denied',
@@ -337,123 +329,103 @@ async function toggleRecording() {
     return;
   }
 
-  // Create speech recognition with exact Chrome-compatible settings
-  recognition = new webkitSpeechRecognition();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
-  recognition.maxAlternatives = 1;
+  startLevelMeter(micStream);
 
-  recognition.onstart = function() {
-    isRecording = true;
-    document.getElementById('startBtn').textContent = 'Recording...';
-    document.getElementById('startBtn').classList.add('recording');
-    document.getElementById('stopBtn').disabled = false;
-    document.getElementById('recStatus').textContent = 'Listening...';
-    document.getElementById('recStatus').classList.add('live');
+  audioChunks = [];
+  mediaRecorder = new MediaRecorder(micStream, { mimeType: getSupportedMimeType() });
+
+  mediaRecorder.ondataavailable = function(e) {
+    if (e.data.size > 0) audioChunks.push(e.data);
   };
 
-  recognition.onresult = function(e) {
-    interimText = '';
-    for (var i = e.resultIndex; i < e.results.length; i++) {
-      var transcript = e.results[i][0].transcript;
-      if (e.results[i].isFinal) {
-        fullTranscript += transcript + ' ';
-      } else {
-        interimText = transcript;
-      }
-    }
-    updateTranscriptDisplay();
-    document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
+  mediaRecorder.onstop = function() {
+    // Stop mic and level meter
+    stopLevelMeter();
+    micStream.getTracks().forEach(function(t) { t.stop(); });
+    micStream = null;
+
+    // Send audio to server for transcription
+    transcribeAudio();
   };
 
-  recognition.onerror = function(e) {
-    console.log('Speech recognition error:', e.error);
-    if (e.error === 'no-speech') {
-      // This fires often - just restart, don't stop recording
-      document.getElementById('recStatus').textContent = 'Waiting for speech...';
-      return;
-    }
-    if (e.error === 'aborted') {
-      // Happens on restart, ignore
-      return;
-    }
-    if (e.error === 'not-allowed') {
-      showMicError('Microphone access denied',
-        'Speech recognition was blocked. Check browser permissions and reload.');
-      stopRecording();
-      return;
-    }
-    if (e.error === 'network') {
-      showMicError('Network error',
-        'Speech recognition requires internet. Chrome sends audio to Google servers for processing.');
-      stopRecording();
-      return;
-    }
-    if (e.error === 'audio-capture') {
-      showMicError('Audio capture failed',
-        'Could not capture audio. Make sure no other app is using the microphone.');
-      stopRecording();
-      return;
-    }
-    showMicError('Speech recognition error', e.error);
-  };
-
-  recognition.onend = function() {
-    // Critical: restart recognition if we're still supposed to be recording.
-    // Chrome stops recognition after periods of silence or after ~60s.
-    if (isRecording) {
-      try {
-        recognition.start();
-        document.getElementById('recStatus').textContent = 'Listening...';
-      } catch (err) {
-        console.log('Restart failed:', err);
-      }
-    }
-  };
-
-  fullTranscript = '';
-  interimText = '';
-  document.getElementById('liveTranscript').innerHTML = '';
-  recognition.start();
+  mediaRecorder.start(1000); // collect chunks every second
+  isRecording = true;
+  document.getElementById('startBtn').textContent = 'Recording...';
+  document.getElementById('startBtn').classList.add('recording');
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('recStatus').textContent = 'Recording audio...';
+  document.getElementById('recStatus').classList.add('live');
+  document.getElementById('liveTranscript').textContent = '';
+  document.getElementById('recSummarizeBtn').disabled = true;
 }
 
-function updateTranscriptDisplay() {
-  var box = document.getElementById('liveTranscript');
-  if (interimText) {
-    box.innerHTML = escapeHtml(fullTranscript) + '<span class="interim">' + escapeHtml(interimText) + '</span>';
-  } else {
-    box.textContent = fullTranscript;
+function getSupportedMimeType() {
+  var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  for (var i = 0; i < types.length; i++) {
+    if (MediaRecorder.isTypeSupported(types[i])) return types[i];
   }
-  box.scrollTop = box.scrollHeight;
+  return '';
 }
 
 function stopRecording() {
+  if (!isRecording) return;
   isRecording = false;
-  if (recognition) {
-    try { recognition.stop(); } catch (err) { /* ignore */ }
-    recognition = null;
-  }
-  stopLevelMeter();
   document.getElementById('startBtn').textContent = 'Start Recording';
   document.getElementById('startBtn').classList.remove('recording');
   document.getElementById('stopBtn').disabled = true;
-  document.getElementById('recStatus').textContent = fullTranscript.trim() ? 'Stopped' : 'Stopped - no speech captured';
   document.getElementById('recStatus').classList.remove('live');
-  document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
-  // Show final transcript without interim styling
-  if (fullTranscript.trim()) {
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    document.getElementById('recStatus').textContent = 'Stopping...';
+    mediaRecorder.stop(); // triggers onstop -> transcribeAudio
+  }
+}
+
+async function transcribeAudio() {
+  if (!audioChunks.length) {
+    document.getElementById('recStatus').textContent = 'No audio recorded';
+    return;
+  }
+
+  document.getElementById('recStatus').textContent = '';
+  document.getElementById('liveTranscript').innerHTML =
+    '<span class="spinner"></span> Transcribing audio with Whisper...';
+
+  var mimeType = getSupportedMimeType() || 'audio/webm';
+  var ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+  var blob = new Blob(audioChunks, { type: mimeType });
+  var formData = new FormData();
+  formData.append('audio', blob, 'recording.' + ext);
+
+  try {
+    var resp = await fetch('/transcribe', { method: 'POST', body: formData });
+    var data = await resp.json();
+
+    if (data.error) {
+      document.getElementById('liveTranscript').innerHTML =
+        '<span class="error">' + escapeHtml(data.error) + '</span>';
+      document.getElementById('recStatus').textContent = 'Transcription failed';
+      return;
+    }
+
+    fullTranscript = data.text || '';
     document.getElementById('liveTranscript').textContent = fullTranscript;
+    document.getElementById('recSummarizeBtn').disabled = !fullTranscript.trim();
+    document.getElementById('recStatus').textContent = fullTranscript.trim() ? 'Transcription complete' : 'No speech detected in recording';
+  } catch (err) {
+    document.getElementById('liveTranscript').innerHTML =
+      '<span class="error">Transcription request failed: ' + escapeHtml(err.message) + '</span>';
+    document.getElementById('recStatus').textContent = 'Transcription failed';
   }
 }
 
 // --- Copy to clipboard ---
 function copyPrompt(btn, idx) {
-  const el = document.getElementById('prompt-text-' + idx);
-  navigator.clipboard.writeText(el.textContent).then(() => {
+  var el = document.getElementById('prompt-text-' + idx);
+  navigator.clipboard.writeText(el.textContent).then(function() {
     btn.textContent = 'Copied!';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
   });
 }
 
@@ -464,12 +436,12 @@ async function callSummarize(transcript, title, resultDiv, tabId) {
   resultDiv.innerHTML = '<p><span class="spinner"></span> Generating summary...</p>';
 
   try {
-    const resp = await fetch('/summarize', {
+    var resp = await fetch('/summarize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript, title: title || 'Untitled Meeting' })
+      body: JSON.stringify({ transcript: transcript, title: title || 'Untitled Meeting' })
     });
-    const data = await resp.json();
+    var data = await resp.json();
     if (data.error) { resultDiv.innerHTML = '<p class="error">' + data.error + '</p>'; return; }
 
     // Save to localStorage
@@ -482,18 +454,18 @@ async function callSummarize(transcript, title, resultDiv, tabId) {
       date: new Date().toLocaleString()
     });
 
-    let html = '<div class="result-card"><h3>' + escapeHtml(data.title || title || 'Meeting') + '</h3>';
+    var html = '<div class="result-card"><h3>' + escapeHtml(data.title || title || 'Meeting') + '</h3>';
     if (data.summary) {
       html += '<div class="section"><h4>Summary</h4><div class="section-body">' + escapeHtml(data.summary) + '</div></div>';
     }
     if (data.action_items && data.action_items.length) {
       html += '<div class="section"><h4>Action Items</h4><ul>';
-      data.action_items.forEach(item => { html += '<li>' + escapeHtml(item) + '</li>'; });
+      data.action_items.forEach(function(item) { html += '<li>' + escapeHtml(item) + '</li>'; });
       html += '</ul></div>';
     }
     if (data.prompts && data.prompts.length) {
       html += '<div class="section"><h4>AI Prompts</h4>';
-      data.prompts.forEach((p, idx) => {
+      data.prompts.forEach(function(p, idx) {
         html += '<div class="prompt-card">';
         html += '<div class="prompt-label">' + escapeHtml(p.action_item) + '</div>';
         html += '<div class="prompt-text" id="prompt-text-' + idx + '">' + escapeHtml(p.prompt) + '</div>';
@@ -519,7 +491,6 @@ function resetTab(tabId) {
     document.getElementById('recStatus').textContent = 'Ready';
     clearMicError();
     fullTranscript = '';
-    interimText = '';
   } else {
     document.getElementById('pasteTitle').value = '';
     document.getElementById('pasteText').value = '';
@@ -528,15 +499,14 @@ function resetTab(tabId) {
 }
 
 function summarizeRecording() {
-  const transcript = fullTranscript.trim();
-  const title = document.getElementById('recTitle').value;
-  callSummarize(transcript, title, document.getElementById('recResult'), 'record');
+  callSummarize(fullTranscript.trim(), document.getElementById('recTitle').value,
+                document.getElementById('recResult'), 'record');
 }
 
 function summarizePaste() {
-  const transcript = document.getElementById('pasteText').value.trim();
-  const title = document.getElementById('pasteTitle').value;
-  callSummarize(transcript, title, document.getElementById('pasteResult'), 'paste');
+  callSummarize(document.getElementById('pasteText').value.trim(),
+                document.getElementById('pasteTitle').value,
+                document.getElementById('pasteResult'), 'paste');
 }
 </script>
 </body>
@@ -547,6 +517,48 @@ function summarizePaste() {
 @app.route("/")
 def index():
     return render_template_string(TEMPLATE)
+
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return jsonify({"error": "OPENAI_API_KEY not configured on server."}), 500
+
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio file received."}), 400
+
+    audio_file = request.files["audio"]
+
+    # Determine file extension from the uploaded filename
+    ext = audio_file.filename.rsplit(".", 1)[-1] if "." in audio_file.filename else "webm"
+
+    try:
+        # Save to a temp file (Whisper API needs a file-like with a name)
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+            audio_file.save(tmp)
+            tmp_path = tmp.name
+
+        client = openai.OpenAI(api_key=api_key)
+        with open(tmp_path, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+            )
+
+        os.unlink(tmp_path)
+        return jsonify({"text": transcript.text})
+
+    except openai.AuthenticationError:
+        return jsonify({"error": "Invalid OpenAI API key."}), 401
+    except Exception as e:
+        # Clean up temp file on error
+        if "tmp_path" in locals():
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/summarize", methods=["POST"])
@@ -609,7 +621,7 @@ def summarize():
         })
 
     except anthropic.AuthenticationError:
-        return jsonify({"error": "Invalid API key."}), 401
+        return jsonify({"error": "Invalid Anthropic API key."}), 401
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
