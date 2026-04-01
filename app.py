@@ -312,22 +312,22 @@ function clearMicError() {
 async function toggleRecording() {
   if (isRecording) { stopRecording(); return; }
 
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+  if (!('webkitSpeechRecognition' in window)) {
     showMicError('Browser not supported',
-      'Speech recognition requires Chrome, Edge, or Safari 14.1+. Please switch browsers.');
+      'This app requires Chrome (desktop or Android). webkitSpeechRecognition is not available in this browser.');
     return;
   }
 
   clearMicError();
 
-  // Request mic permission first to get a clear error if denied
+  // Request mic permission first so we get a clear error if denied
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     startLevelMeter(micStream);
   } catch (err) {
     if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
       showMicError('Microphone access denied',
-        'Please allow microphone access in your browser settings and try again.');
+        'Please allow microphone access in your browser settings, then reload and try again.');
     } else if (err.name === 'NotFoundError') {
       showMicError('No microphone found',
         'Please connect a microphone and try again.');
@@ -337,66 +337,78 @@ async function toggleRecording() {
     return;
   }
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SpeechRecognition();
+  // Create speech recognition with exact Chrome-compatible settings
+  recognition = new webkitSpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
+  recognition.maxAlternatives = 1;
 
-  recognition.onstart = () => {
+  recognition.onstart = function() {
     isRecording = true;
-    document.getElementById('startBtn').textContent = 'Pause';
+    document.getElementById('startBtn').textContent = 'Recording...';
     document.getElementById('startBtn').classList.add('recording');
     document.getElementById('stopBtn').disabled = false;
     document.getElementById('recStatus').textContent = 'Listening...';
     document.getElementById('recStatus').classList.add('live');
   };
 
-  recognition.onresult = (e) => {
+  recognition.onresult = function(e) {
     interimText = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
+    for (var i = e.resultIndex; i < e.results.length; i++) {
+      var transcript = e.results[i][0].transcript;
       if (e.results[i].isFinal) {
-        fullTranscript += t + ' ';
+        fullTranscript += transcript + ' ';
       } else {
-        interimText = t;
+        interimText = transcript;
       }
     }
     updateTranscriptDisplay();
     document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
   };
 
-  recognition.onerror = (e) => {
+  recognition.onerror = function(e) {
+    console.log('Speech recognition error:', e.error);
     if (e.error === 'no-speech') {
-      document.getElementById('recStatus').textContent = 'No speech detected - keep talking...';
+      // This fires often - just restart, don't stop recording
+      document.getElementById('recStatus').textContent = 'Waiting for speech...';
+      return;
+    }
+    if (e.error === 'aborted') {
+      // Happens on restart, ignore
       return;
     }
     if (e.error === 'not-allowed') {
       showMicError('Microphone access denied',
-        'Speech recognition was blocked. Check your browser permissions.');
+        'Speech recognition was blocked. Check browser permissions and reload.');
       stopRecording();
       return;
     }
     if (e.error === 'network') {
       showMicError('Network error',
-        'Speech recognition requires an internet connection (audio is processed by your browser\'s cloud service).');
+        'Speech recognition requires internet. Chrome sends audio to Google servers for processing.');
       stopRecording();
       return;
     }
     if (e.error === 'audio-capture') {
       showMicError('Audio capture failed',
-        'Could not capture audio from your microphone. Check that no other app is using it.');
+        'Could not capture audio. Make sure no other app is using the microphone.');
       stopRecording();
       return;
     }
     showMicError('Speech recognition error', e.error);
-    console.error('Speech error:', e.error);
   };
 
-  recognition.onend = () => {
+  recognition.onend = function() {
+    // Critical: restart recognition if we're still supposed to be recording.
+    // Chrome stops recognition after periods of silence or after ~60s.
     if (isRecording) {
-      // Auto-restart to keep continuous recording
-      try { recognition.start(); } catch (e) { /* already started */ }
+      try {
+        recognition.start();
+        document.getElementById('recStatus').textContent = 'Listening...';
+      } catch (err) {
+        console.log('Restart failed:', err);
+      }
     }
   };
 
@@ -407,7 +419,7 @@ async function toggleRecording() {
 }
 
 function updateTranscriptDisplay() {
-  const box = document.getElementById('liveTranscript');
+  var box = document.getElementById('liveTranscript');
   if (interimText) {
     box.innerHTML = escapeHtml(fullTranscript) + '<span class="interim">' + escapeHtml(interimText) + '</span>';
   } else {
@@ -418,7 +430,10 @@ function updateTranscriptDisplay() {
 
 function stopRecording() {
   isRecording = false;
-  if (recognition) { recognition.stop(); recognition = null; }
+  if (recognition) {
+    try { recognition.stop(); } catch (err) { /* ignore */ }
+    recognition = null;
+  }
   stopLevelMeter();
   document.getElementById('startBtn').textContent = 'Start Recording';
   document.getElementById('startBtn').classList.remove('recording');
