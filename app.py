@@ -127,6 +127,8 @@ def summarize():
     data = request.json
     transcript = data.get('transcript', '')
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    print("API KEY EXISTS:", bool(api_key))
+    print("API KEY LENGTH:", len(api_key))
     if not api_key:
         return jsonify({'error': 'ANTHROPIC_API_KEY not set'}), 400
     try:
