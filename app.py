@@ -73,16 +73,15 @@ function startRecording() {
     document.getElementById('transcript').value = fullText;
   };
   recognition.onerror = (e) => {
+    if (e.error === 'aborted') return;
     if (e.error === 'no-speech') return;
     document.getElementById('error').textContent = 'Mic error: ' + e.error;
   };
   recognition.onend = () => {
     if (isRecording) {
-      try {
-        recognition.start();
-      } catch(e) {
-        // already started, ignore
-      }
+      setTimeout(() => {
+        try { recognition.start(); } catch(e) {}
+      }, 100);
     }
   };
   recognition.start();
