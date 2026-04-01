@@ -73,18 +73,24 @@ function startRecording() {
     document.getElementById('transcript').value = fullText;
   };
   recognition.onerror = (e) => {
+    if (e.error === 'no-speech') return;
     document.getElementById('error').textContent = 'Mic error: ' + e.error;
-    if (e.error === 'no-speech' && isRecording) recognition.start();
   };
   recognition.onend = () => {
-    if (isRecording) recognition.start();
+    if (isRecording) {
+      try {
+        recognition.start();
+      } catch(e) {
+        // already started, ignore
+      }
+    }
   };
   recognition.start();
 }
 
 function stopRecording() {
   isRecording = false;
-  if (recognition) recognition.stop();
+  if (recognition) recognition.abort();
   document.getElementById('status').textContent = 'Stopped';
 }
 
