@@ -33,7 +33,7 @@ TEMPLATE = r"""
   .tab-panel.active { display: block; }
 
   /* Record tab */
-  .rec-controls { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+  .rec-controls { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
   .rec-btn { padding: 0.7rem 1.5rem; border: none; border-radius: 6px; font-size: 1rem;
              font-weight: 600; cursor: pointer; transition: all 0.2s; }
   #startBtn { background: #e74c3c; color: #fff; }
@@ -46,6 +46,18 @@ TEMPLATE = r"""
   .rec-status.live { color: #e74c3c; font-weight: 600; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
+  /* Audio level meter */
+  .level-meter { height: 6px; border-radius: 3px; background: #eee; margin-bottom: 1rem;
+                 overflow: hidden; }
+  .level-meter-fill { height: 100%; width: 0%; border-radius: 3px;
+                      background: linear-gradient(90deg, #28a745, #e74c3c);
+                      transition: width 0.1s ease; }
+
+  /* Mic error */
+  .mic-error { background: #fdf0ef; border: 1px solid #f5c6cb; border-radius: 6px;
+               padding: 0.75rem 1rem; margin-bottom: 1rem; color: #721c24; font-size: 0.9rem; }
+  .mic-error strong { display: block; margin-bottom: 0.25rem; }
+
   /* Transcript area */
   .transcript-box { width: 100%; min-height: 180px; max-height: 350px; overflow-y: auto;
                     border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem;
@@ -53,6 +65,7 @@ TEMPLATE = r"""
                     margin-bottom: 1rem; }
   .transcript-box:empty::before { content: "Transcript will appear here...";
                                   color: #bbb; font-style: italic; }
+  .transcript-box .interim { color: #999; }
 
   /* Paste tab */
   textarea { width: 100%; min-height: 200px; resize: vertical; border: 1px solid #ddd;
@@ -82,6 +95,19 @@ TEMPLATE = r"""
   .result-card .section-body { white-space: pre-wrap; }
   .result-card ul { margin-left: 1.25rem; }
   .result-card li { margin-bottom: 0.25rem; }
+
+  /* AI Prompts */
+  .prompt-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px;
+                 padding: 0.75rem 1rem; margin-bottom: 0.5rem; position: relative; }
+  .prompt-card .prompt-label { font-size: 0.8rem; font-weight: 600; color: #3a86ff;
+                               margin-bottom: 0.25rem; }
+  .prompt-card .prompt-text { font-size: 0.9rem; white-space: pre-wrap; color: #333;
+                              padding-right: 3.5rem; }
+  .copy-btn { position: absolute; top: 0.6rem; right: 0.6rem; background: #3a86ff; color: #fff;
+              border: none; border-radius: 4px; padding: 0.3rem 0.6rem; font-size: 0.75rem;
+              font-weight: 600; cursor: pointer; }
+  .copy-btn:hover { background: #2667cc; }
+  .copy-btn.copied { background: #28a745; }
 
   /* History */
   .history { margin-top: 2rem; }
@@ -129,6 +155,10 @@ TEMPLATE = r"""
         <button id="stopBtn" class="rec-btn" onclick="stopRecording()" disabled>Stop</button>
         <span id="recStatus" class="rec-status">Ready</span>
       </div>
+      <div class="level-meter" id="levelMeter" style="display:none">
+        <div class="level-meter-fill" id="levelFill"></div>
+      </div>
+      <div id="micError"></div>
       <div id="liveTranscript" class="transcript-box"></div>
     </div>
 
@@ -164,6 +194,10 @@ let recognition = null;
 let isRecording = false;
 let fullTranscript = '';
 let interimText = '';
+let audioCtx = null;
+let analyser = null;
+let micStream = null;
+let levelRAF = null;
 
 const MEETINGS_STORAGE = 'meeting_notes_history';
 
@@ -232,13 +266,77 @@ function switchTab(tab) {
   document.getElementById('tab-paste').classList.toggle('active', tab === 'paste');
 }
 
+// --- Audio level meter ---
+function startLevelMeter(stream) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  const source = audioCtx.createMediaStreamSource(stream);
+  source.connect(analyser);
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const meter = document.getElementById('levelMeter');
+  const fill = document.getElementById('levelFill');
+  meter.style.display = 'block';
+
+  function tick() {
+    analyser.getByteFrequencyData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i];
+    const avg = sum / data.length;
+    const pct = Math.min(100, (avg / 128) * 100);
+    fill.style.width = pct + '%';
+    levelRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function stopLevelMeter() {
+  if (levelRAF) { cancelAnimationFrame(levelRAF); levelRAF = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  document.getElementById('levelFill').style.width = '0%';
+  document.getElementById('levelMeter').style.display = 'none';
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+}
+
+// --- Mic error display ---
+function showMicError(title, detail) {
+  document.getElementById('micError').innerHTML =
+    '<div class="mic-error"><strong>' + escapeHtml(title) + '</strong>' + escapeHtml(detail) + '</div>';
+}
+
+function clearMicError() {
+  document.getElementById('micError').innerHTML = '';
+}
+
 // --- Recording ---
-function toggleRecording() {
+async function toggleRecording() {
   if (isRecording) { stopRecording(); return; }
+
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    alert('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+    showMicError('Browser not supported',
+      'Speech recognition requires Chrome, Edge, or Safari 14.1+. Please switch browsers.');
     return;
   }
+
+  clearMicError();
+
+  // Request mic permission first to get a clear error if denied
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    startLevelMeter(micStream);
+  } catch (err) {
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      showMicError('Microphone access denied',
+        'Please allow microphone access in your browser settings and try again.');
+    } else if (err.name === 'NotFoundError') {
+      showMicError('No microphone found',
+        'Please connect a microphone and try again.');
+    } else {
+      showMicError('Microphone error', err.message);
+    }
+    return;
+  }
+
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SpeechRecognition();
   recognition.continuous = true;
@@ -264,37 +362,84 @@ function toggleRecording() {
         interimText = t;
       }
     }
-    const box = document.getElementById('liveTranscript');
-    box.textContent = fullTranscript + interimText;
-    box.scrollTop = box.scrollHeight;
+    updateTranscriptDisplay();
     document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
   };
 
   recognition.onerror = (e) => {
-    if (e.error === 'no-speech') return;
+    if (e.error === 'no-speech') {
+      document.getElementById('recStatus').textContent = 'No speech detected - keep talking...';
+      return;
+    }
+    if (e.error === 'not-allowed') {
+      showMicError('Microphone access denied',
+        'Speech recognition was blocked. Check your browser permissions.');
+      stopRecording();
+      return;
+    }
+    if (e.error === 'network') {
+      showMicError('Network error',
+        'Speech recognition requires an internet connection (audio is processed by your browser\'s cloud service).');
+      stopRecording();
+      return;
+    }
+    if (e.error === 'audio-capture') {
+      showMicError('Audio capture failed',
+        'Could not capture audio from your microphone. Check that no other app is using it.');
+      stopRecording();
+      return;
+    }
+    showMicError('Speech recognition error', e.error);
     console.error('Speech error:', e.error);
-    document.getElementById('recStatus').textContent = 'Error: ' + e.error;
   };
 
   recognition.onend = () => {
-    if (isRecording) { recognition.start(); }
+    if (isRecording) {
+      // Auto-restart to keep continuous recording
+      try { recognition.start(); } catch (e) { /* already started */ }
+    }
   };
 
   fullTranscript = '';
   interimText = '';
-  document.getElementById('liveTranscript').textContent = '';
+  document.getElementById('liveTranscript').innerHTML = '';
   recognition.start();
+}
+
+function updateTranscriptDisplay() {
+  const box = document.getElementById('liveTranscript');
+  if (interimText) {
+    box.innerHTML = escapeHtml(fullTranscript) + '<span class="interim">' + escapeHtml(interimText) + '</span>';
+  } else {
+    box.textContent = fullTranscript;
+  }
+  box.scrollTop = box.scrollHeight;
 }
 
 function stopRecording() {
   isRecording = false;
   if (recognition) { recognition.stop(); recognition = null; }
+  stopLevelMeter();
   document.getElementById('startBtn').textContent = 'Start Recording';
   document.getElementById('startBtn').classList.remove('recording');
   document.getElementById('stopBtn').disabled = true;
-  document.getElementById('recStatus').textContent = 'Stopped';
+  document.getElementById('recStatus').textContent = fullTranscript.trim() ? 'Stopped' : 'Stopped - no speech captured';
   document.getElementById('recStatus').classList.remove('live');
   document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
+  // Show final transcript without interim styling
+  if (fullTranscript.trim()) {
+    document.getElementById('liveTranscript').textContent = fullTranscript;
+  }
+}
+
+// --- Copy to clipboard ---
+function copyPrompt(btn, idx) {
+  const el = document.getElementById('prompt-text-' + idx);
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
 }
 
 // --- Summarize ---
@@ -318,6 +463,7 @@ async function callSummarize(transcript, title, resultDiv, tabId) {
       transcript: transcript,
       summary: data.summary || '',
       action_items: data.action_items || [],
+      prompts: data.prompts || [],
       date: new Date().toLocaleString()
     });
 
@@ -329,6 +475,17 @@ async function callSummarize(transcript, title, resultDiv, tabId) {
       html += '<div class="section"><h4>Action Items</h4><ul>';
       data.action_items.forEach(item => { html += '<li>' + escapeHtml(item) + '</li>'; });
       html += '</ul></div>';
+    }
+    if (data.prompts && data.prompts.length) {
+      html += '<div class="section"><h4>AI Prompts</h4>';
+      data.prompts.forEach((p, idx) => {
+        html += '<div class="prompt-card">';
+        html += '<div class="prompt-label">' + escapeHtml(p.action_item) + '</div>';
+        html += '<div class="prompt-text" id="prompt-text-' + idx + '">' + escapeHtml(p.prompt) + '</div>';
+        html += '<button class="copy-btn" onclick="event.stopPropagation();copyPrompt(this,' + idx + ')">Copy</button>';
+        html += '</div>';
+      });
+      html += '</div>';
     }
     html += '</div>';
     html += '<button class="btn btn-new" onclick="resetTab(\'' + tabId + '\')">New Recording</button>';
@@ -345,6 +502,7 @@ function resetTab(tabId) {
     document.getElementById('recResult').innerHTML = '';
     document.getElementById('recSummarizeBtn').disabled = true;
     document.getElementById('recStatus').textContent = 'Ready';
+    clearMicError();
     fullTranscript = '';
     interimText = '';
   } else {
@@ -393,7 +551,7 @@ def summarize():
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=1024,
+            max_tokens=4096,
             messages=[
                 {
                     "role": "user",
@@ -401,9 +559,16 @@ def summarize():
                         "You are a meeting assistant. Analyze the following meeting transcript "
                         "and provide:\n"
                         "1. A concise summary (2-4 paragraphs)\n"
-                        "2. A list of action items (each as a short bullet)\n\n"
-                        "Respond in JSON with keys: \"summary\" (string) and "
-                        "\"action_items\" (array of strings).\n\n"
+                        "2. A list of action items (each as a short bullet)\n"
+                        "3. For EACH action item, generate a ready-to-use Claude prompt that "
+                        "someone could paste directly into Claude to get help completing that "
+                        "action item. Each prompt should be specific, actionable, and include "
+                        "relevant context from the meeting.\n\n"
+                        "Respond in JSON with keys:\n"
+                        '- "summary" (string)\n'
+                        '- "action_items" (array of strings)\n'
+                        '- "prompts" (array of objects, each with "action_item" (string) and '
+                        '"prompt" (string))\n\n'
                         f"Meeting title: {title}\n\n"
                         f"Transcript:\n{transcript}"
                     ),
@@ -412,24 +577,20 @@ def summarize():
         )
 
         response_text = message.content[0].text
-        # Try to parse JSON from the response
         try:
             result = json.loads(response_text)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown code block
             match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
             if match:
                 result = json.loads(match.group(1))
             else:
-                result = {"summary": response_text, "action_items": []}
-
-        summary = result.get("summary", "")
-        action_items = result.get("action_items", [])
+                result = {"summary": response_text, "action_items": [], "prompts": []}
 
         return jsonify({
             "title": title,
-            "summary": summary,
-            "action_items": action_items,
+            "summary": result.get("summary", ""),
+            "action_items": result.get("action_items", []),
+            "prompts": result.get("prompts", []),
         })
 
     except anthropic.AuthenticationError:
