@@ -85,6 +85,8 @@ TEMPLATE = r"""
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-secondary { background: #6c757d; }
   .btn-secondary:hover { background: #545b62; }
+  .btn-new { background: #28a745; margin-top: 1rem; }
+  .btn-new:hover { background: #218838; }
 
   /* Results */
   .result-card { background: #f8f9ff; border: 1px solid #d4deff; border-radius: 8px;
@@ -219,6 +221,22 @@ let isRecording = false;
 let fullTranscript = '';
 let interimText = '';
 
+// Persist API key in localStorage
+const STORAGE_KEY = 'anthropic_api_key';
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem(STORAGE_KEY) || '';
+  document.getElementById('recApiKey').value = saved;
+  document.getElementById('pasteApiKey').value = saved;
+  document.getElementById('recApiKey').addEventListener('input', (e) => {
+    localStorage.setItem(STORAGE_KEY, e.target.value);
+    document.getElementById('pasteApiKey').value = e.target.value;
+  });
+  document.getElementById('pasteApiKey').addEventListener('input', (e) => {
+    localStorage.setItem(STORAGE_KEY, e.target.value);
+    document.getElementById('recApiKey').value = e.target.value;
+  });
+});
+
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
     b.classList.toggle('active', (tab === 'record' && i === 0) || (tab === 'paste' && i === 1));
@@ -291,7 +309,7 @@ function stopRecording() {
   document.getElementById('recSummarizeBtn').disabled = fullTranscript.trim().length === 0;
 }
 
-async function callSummarize(transcript, title, apiKey, resultDiv) {
+async function callSummarize(transcript, title, apiKey, resultDiv, tabId) {
   if (!transcript.trim()) { resultDiv.innerHTML = '<p class="error">No transcript to summarize.</p>'; return; }
   if (!apiKey.trim()) { resultDiv.innerHTML = '<p class="error">Please enter your Anthropic API key.</p>'; return; }
 
@@ -316,9 +334,26 @@ async function callSummarize(transcript, title, apiKey, resultDiv) {
       html += '</ul></div>';
     }
     html += '</div>';
+    html += '<button class="btn btn-new" onclick="resetTab(\'' + tabId + '\')">New Recording</button>';
     resultDiv.innerHTML = html;
   } catch (err) {
     resultDiv.innerHTML = '<p class="error">Request failed: ' + err.message + '</p>';
+  }
+}
+
+function resetTab(tabId) {
+  if (tabId === 'record') {
+    document.getElementById('recTitle').value = '';
+    document.getElementById('liveTranscript').textContent = '';
+    document.getElementById('recResult').innerHTML = '';
+    document.getElementById('recSummarizeBtn').disabled = true;
+    document.getElementById('recStatus').textContent = 'Ready';
+    fullTranscript = '';
+    interimText = '';
+  } else {
+    document.getElementById('pasteTitle').value = '';
+    document.getElementById('pasteText').value = '';
+    document.getElementById('pasteResult').innerHTML = '';
   }
 }
 
@@ -326,14 +361,14 @@ function summarizeRecording() {
   const transcript = fullTranscript.trim();
   const title = document.getElementById('recTitle').value;
   const apiKey = document.getElementById('recApiKey').value;
-  callSummarize(transcript, title, apiKey, document.getElementById('recResult'));
+  callSummarize(transcript, title, apiKey, document.getElementById('recResult'), 'record');
 }
 
 function summarizePaste() {
   const transcript = document.getElementById('pasteText').value.trim();
   const title = document.getElementById('pasteTitle').value;
   const apiKey = document.getElementById('pasteApiKey').value;
-  callSummarize(transcript, title, apiKey, document.getElementById('pasteResult'));
+  callSummarize(transcript, title, apiKey, document.getElementById('pasteResult'), 'paste');
 }
 </script>
 </body>
