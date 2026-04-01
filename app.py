@@ -61,10 +61,8 @@ TEMPLATE = r"""
 
   /* Shared */
   label { display: block; font-weight: 600; margin-bottom: 0.35rem; margin-top: 0.75rem; }
-  input[type=text], input[type=password] { width: 100%; padding: 0.55rem; border: 1px solid #ddd;
+  input[type=text] { width: 100%; padding: 0.55rem; border: 1px solid #ddd;
              border-radius: 6px; font-size: 1rem; font-family: inherit; }
-  .api-row { display: flex; gap: 0.5rem; align-items: end; margin-bottom: 1rem; }
-  .api-row > div:first-child { flex: 1; }
   .btn { padding: 0.65rem 1.5rem; background: #3a86ff; color: #fff; border: none;
          border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; }
   .btn:hover { background: #2667cc; }
@@ -134,12 +132,6 @@ TEMPLATE = r"""
       <div id="liveTranscript" class="transcript-box"></div>
     </div>
 
-    <div class="api-row">
-      <div>
-        <label for="recApiKey">Anthropic API Key</label>
-        <input type="password" id="recApiKey" placeholder="sk-ant-...">
-      </div>
-    </div>
     <button class="btn" id="recSummarizeBtn" onclick="summarizeRecording()" disabled>
       Summarize with AI
     </button>
@@ -154,12 +146,6 @@ TEMPLATE = r"""
     <label for="pasteText" style="margin-top:1rem">Transcript</label>
     <textarea id="pasteText" placeholder="Paste your meeting transcript here..."></textarea>
 
-    <div class="api-row">
-      <div>
-        <label for="pasteApiKey">Anthropic API Key</label>
-        <input type="password" id="pasteApiKey" placeholder="sk-ant-...">
-      </div>
-    </div>
     <button class="btn" onclick="summarizePaste()">Summarize with AI</button>
     <div id="pasteResult"></div>
   </div>
@@ -179,7 +165,6 @@ let isRecording = false;
 let fullTranscript = '';
 let interimText = '';
 
-const API_KEY_STORAGE = 'anthropic_api_key';
 const MEETINGS_STORAGE = 'meeting_notes_history';
 
 // --- localStorage helpers ---
@@ -235,19 +220,6 @@ function renderHistory() {
 
 // --- Init ---
 window.addEventListener('DOMContentLoaded', () => {
-  // Restore API key
-  const savedKey = localStorage.getItem(API_KEY_STORAGE) || '';
-  document.getElementById('recApiKey').value = savedKey;
-  document.getElementById('pasteApiKey').value = savedKey;
-  document.getElementById('recApiKey').addEventListener('input', (e) => {
-    localStorage.setItem(API_KEY_STORAGE, e.target.value);
-    document.getElementById('pasteApiKey').value = e.target.value;
-  });
-  document.getElementById('pasteApiKey').addEventListener('input', (e) => {
-    localStorage.setItem(API_KEY_STORAGE, e.target.value);
-    document.getElementById('recApiKey').value = e.target.value;
-  });
-  // Render saved meetings
   renderHistory();
 });
 
@@ -326,9 +298,8 @@ function stopRecording() {
 }
 
 // --- Summarize ---
-async function callSummarize(transcript, title, apiKey, resultDiv, tabId) {
+async function callSummarize(transcript, title, resultDiv, tabId) {
   if (!transcript.trim()) { resultDiv.innerHTML = '<p class="error">No transcript to summarize.</p>'; return; }
-  if (!apiKey.trim()) { resultDiv.innerHTML = '<p class="error">Please enter your Anthropic API key.</p>'; return; }
 
   resultDiv.innerHTML = '<p><span class="spinner"></span> Generating summary...</p>';
 
@@ -336,7 +307,7 @@ async function callSummarize(transcript, title, apiKey, resultDiv, tabId) {
     const resp = await fetch('/summarize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript, title: title || 'Untitled Meeting', api_key: apiKey })
+      body: JSON.stringify({ transcript, title: title || 'Untitled Meeting' })
     });
     const data = await resp.json();
     if (data.error) { resultDiv.innerHTML = '<p class="error">' + data.error + '</p>'; return; }
@@ -386,15 +357,13 @@ function resetTab(tabId) {
 function summarizeRecording() {
   const transcript = fullTranscript.trim();
   const title = document.getElementById('recTitle').value;
-  const apiKey = document.getElementById('recApiKey').value;
-  callSummarize(transcript, title, apiKey, document.getElementById('recResult'), 'record');
+  callSummarize(transcript, title, document.getElementById('recResult'), 'record');
 }
 
 function summarizePaste() {
   const transcript = document.getElementById('pasteText').value.trim();
   const title = document.getElementById('pasteTitle').value;
-  const apiKey = document.getElementById('pasteApiKey').value;
-  callSummarize(transcript, title, apiKey, document.getElementById('pasteResult'), 'paste');
+  callSummarize(transcript, title, document.getElementById('pasteResult'), 'paste');
 }
 </script>
 </body>
@@ -412,12 +381,13 @@ def summarize():
     data = request.get_json()
     transcript = data.get("transcript", "")
     title = data.get("title", "Untitled Meeting")
-    api_key = data.get("api_key", "")
 
     if not transcript.strip():
         return jsonify({"error": "No transcript provided."}), 400
-    if not api_key.strip():
-        return jsonify({"error": "No API key provided."}), 400
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured on server."}), 500
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
