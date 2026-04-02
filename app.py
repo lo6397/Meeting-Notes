@@ -24,6 +24,8 @@ HTML = """
   .btn-summarize:hover { background: #153d80; }
   .btn-new { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; font-size: 15px; margin-top: 16px; }
   .btn-new:hover { background: #1e7e34; }
+  .btn-download { background: #6f42c1; color: white; border: none; padding: 10px 24px; border-radius: 6px; font-size: 15px; margin-top: 16px; margin-left: 8px; }
+  .btn-download:hover { background: #5a32a3; }
   .btn-continue { background: #6c757d; color: white; border: none; padding: 10px 24px; border-radius: 6px; font-size: 15px; margin-top: 16px; margin-left: 8px; }
   .btn-continue:hover { background: #545b62; }
   textarea { width: 100%; height: 200px; padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 6px; margin-top: 12px; box-sizing: border-box; }
@@ -79,7 +81,8 @@ HTML = """
 </div>
 
 <div class="card">
-  <input type="text" id="title" placeholder="Meeting title (e.g. Weekly Standup)" />
+  <input type="text" id="title" placeholder="Meeting title (required)" />
+  <div id="title-error" style="color:red;font-size:13px;margin:-12px 0 12px;display:none">Please enter a meeting title before summarizing.</div>
   <div>
     <button class="btn-record" id="recBtn" onclick="startRecording()">Start Recording</button>
     <button class="btn-stop" onclick="stopRecording()">Stop</button>
@@ -102,6 +105,7 @@ HTML = """
     </div>
     <div style="margin-top:20px">
       <button class="btn-new" onclick="newMeeting()">New Meeting</button>
+      <button class="btn-download" onclick="downloadPackage()">Download Meeting Package</button>
       <button class="btn-continue" onclick="continueMeeting()">Continue Recording</button>
     </div>
   </div>
@@ -115,6 +119,12 @@ HTML = """
 <script>
 let recognition;
 let isRecording = false;
+let lastMeeting = null;
+
+// Hide title error on input
+document.getElementById('title').addEventListener('input', () => {
+  document.getElementById('title-error').style.display = 'none';
+});
 
 // API key persistence
 const keyInput = document.getElementById('apiKey');
@@ -230,7 +240,16 @@ function stopRecording() {
 // Summarize
 async function doSummarize() {
   const transcript = document.getElementById('transcript').value.trim();
-  const title = document.getElementById('title').value.trim() || 'Untitled Meeting';
+  const title = document.getElementById('title').value.trim();
+  const titleError = document.getElementById('title-error');
+
+  if (!title) {
+    titleError.style.display = 'block';
+    document.getElementById('title').focus();
+    return;
+  }
+  titleError.style.display = 'none';
+
   if (!transcript) { alert('No transcript yet!'); return; }
 
   document.getElementById('error').textContent = '';
@@ -275,15 +294,18 @@ async function doSummarize() {
   document.getElementById('summary-box').style.display = 'block';
   document.getElementById('status').textContent = '';
 
-  // Save to history
-  saveToHistory({
+  // Save meeting data for download
+  lastMeeting = {
     title: title,
     transcript: transcript,
     summary: data.summary,
     actions: data.actions || [],
     prompts: data.prompts || [],
     date: new Date().toLocaleString()
-  });
+  };
+
+  // Save to history
+  saveToHistory(lastMeeting);
 }
 
 function copyPrompt(btn, idx) {
@@ -308,6 +330,58 @@ function continueMeeting() {
   document.getElementById('summary-box').style.display = 'none';
   document.getElementById('status').textContent = 'Ready - click Start Recording to continue';
   // Transcript is preserved, user can keep recording
+}
+
+// Download meeting package as .txt
+function downloadPackage() {
+  if (!lastMeeting) return;
+  const m = lastMeeting;
+  let content = '';
+  content += '═══════════════════════════════════════════\n';
+  content += '  ' + m.title + '\n';
+  content += '═══════════════════════════════════════════\n';
+  content += 'Date: ' + m.date + '\n\n';
+
+  content += '───────────────────────────────────────────\n';
+  content += '  TRANSCRIPT\n';
+  content += '───────────────────────────────────────────\n\n';
+  content += m.transcript + '\n\n';
+
+  content += '───────────────────────────────────────────\n';
+  content += '  SUMMARY\n';
+  content += '───────────────────────────────────────────\n\n';
+  content += m.summary + '\n\n';
+
+  content += '───────────────────────────────────────────\n';
+  content += '  ACTION ITEMS\n';
+  content += '───────────────────────────────────────────\n\n';
+  m.actions.forEach((a, i) => {
+    content += '  ' + (i + 1) + '. [ ] ' + a + '\n';
+  });
+  content += '\n';
+
+  if (m.prompts && m.prompts.length) {
+    content += '───────────────────────────────────────────\n';
+    content += '  AI PROMPTS (paste into Claude)\n';
+    content += '───────────────────────────────────────────\n\n';
+    m.prompts.forEach((p, i) => {
+      content += '--- Prompt ' + (i + 1) + ': ' + p.action + ' ---\n\n';
+      content += p.prompt + '\n\n';
+    });
+  }
+
+  // Build filename: Title-Date.txt
+  const dateStr = new Date().toISOString().split('T')[0];
+  const safeTitle = m.title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '-');
+  const filename = safeTitle + '-' + dateStr + '.txt';
+
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // Init
