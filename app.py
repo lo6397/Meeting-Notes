@@ -52,11 +52,17 @@ HTML = """
   /* History */
   .history { margin-top: 30px; }
   .history h2 { font-size: 1.2rem; margin-bottom: 12px; }
-  .history-item { background: white; border-radius: 8px; padding: 16px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: pointer; }
+  .history-item { background: white; border-radius: 8px; padding: 16px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: relative; }
+  .history-item .history-header { cursor: pointer; }
   .history-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-  .history-item h4 { margin: 0 0 2px; }
+  .history-item h4 { margin: 0 0 2px; padding-right: 30px; }
   .history-item .date { font-size: 12px; color: #888; }
   .history-item .preview { font-size: 13px; color: #555; margin-top: 4px; }
+  .btn-delete { position: absolute; top: 14px; right: 14px; background: none; border: none; font-size: 16px; color: #ccc; padding: 4px; }
+  .btn-delete:hover { color: #dc3535; }
+  .history-actions { margin-top: 10px; }
+  .btn-dl-sm { background: #6f42c1; color: white; border: none; border-radius: 4px; padding: 5px 12px; font-size: 12px; font-weight: 600; }
+  .btn-dl-sm:hover { background: #5a32a3; }
   .history-detail { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; font-size: 13px; }
   .history-detail.show { display: block; }
   .history-detail h5 { color: #1a4fa3; margin: 10px 0 4px; font-size: 13px; }
@@ -137,8 +143,17 @@ function loadHistory() {
   catch(e) { return []; }
 }
 function saveToHistory(meeting) {
+  meeting.id = Date.now();
+  meeting.date = new Date().toISOString();
   const h = loadHistory();
   h.push(meeting);
+  localStorage.setItem('meeting_history', JSON.stringify(h));
+  renderHistory();
+}
+function deleteMeeting(id) {
+  event.stopPropagation();
+  if (!confirm('Delete this meeting?')) return;
+  const h = loadHistory().filter(m => m.id !== id);
   localStorage.setItem('meeting_history', JSON.stringify(h));
   renderHistory();
 }
@@ -147,20 +162,57 @@ function esc(s) {
   d.textContent = s || '';
   return d.innerHTML;
 }
+function formatDate(iso) {
+  try { return new Date(iso).toLocaleString(); }
+  catch(e) { return iso; }
+}
+function buildPackageText(m) {
+  let c = '';
+  c += '='.repeat(45) + '\n  ' + m.title + '\n' + '='.repeat(45) + '\n';
+  c += 'Date: ' + formatDate(m.date) + '\n\n';
+  c += '-'.repeat(45) + '\n  TRANSCRIPT\n' + '-'.repeat(45) + '\n\n' + m.transcript + '\n\n';
+  c += '-'.repeat(45) + '\n  SUMMARY\n' + '-'.repeat(45) + '\n\n' + m.summary + '\n\n';
+  c += '-'.repeat(45) + '\n  ACTION ITEMS\n' + '-'.repeat(45) + '\n\n';
+  (m.actions || []).forEach((a, i) => { c += '  ' + (i+1) + '. [ ] ' + a + '\n'; });
+  c += '\n';
+  if (m.prompts && m.prompts.length) {
+    c += '-'.repeat(45) + '\n  AI PROMPTS (paste into Claude)\n' + '-'.repeat(45) + '\n\n';
+    m.prompts.forEach((p, i) => { c += '--- Prompt ' + (i+1) + ': ' + p.action + ' ---\n\n' + p.prompt + '\n\n'; });
+  }
+  return c;
+}
+function downloadMeetingFile(m) {
+  const content = buildPackageText(m);
+  const dateStr = m.date ? m.date.split('T')[0] : new Date().toISOString().split('T')[0];
+  const safeTitle = m.title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '-');
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = safeTitle + '-' + dateStr + '.txt'; a.click();
+  URL.revokeObjectURL(url);
+}
+function downloadHistoryItem(id) {
+  event.stopPropagation();
+  const m = loadHistory().find(m => m.id === id);
+  if (m) downloadMeetingFile(m);
+}
 function renderHistory() {
   const meetings = loadHistory();
   const el = document.getElementById('historyList');
   if (!meetings.length) { el.innerHTML = '<div class="empty">No past meetings yet.</div>'; return; }
+  // Sort newest first
+  const sorted = meetings.slice().sort((a, b) => (b.id || 0) - (a.id || 0));
   let html = '';
-  for (let i = meetings.length - 1; i >= 0; i--) {
-    const m = meetings[i];
-    const preview = (m.transcript || '').substring(0, 100) + ((m.transcript || '').length > 100 ? '...' : '');
-    html += '<div class="history-item" onclick="toggleDetail(this)">';
+  sorted.forEach(m => {
+    const preview = (m.summary || '').substring(0, 120) + ((m.summary || '').length > 120 ? '...' : '');
+    html += '<div class="history-item">';
+    html += '<button class="btn-delete" onclick="deleteMeeting(' + m.id + ')" title="Delete">&#128465;</button>';
+    html += '<div class="history-header" onclick="toggleDetail(this.parentElement)">';
     html += '<h4>' + esc(m.title) + '</h4>';
-    html += '<div class="date">' + esc(m.date) + '</div>';
+    html += '<div class="date">' + esc(formatDate(m.date)) + '</div>';
     html += '<div class="preview">' + esc(preview) + '</div>';
+    html += '</div>';
     html += '<div class="history-detail">';
-    html += '<h5>Transcript</h5><pre>' + esc(m.transcript) + '</pre>';
     if (m.summary) html += '<h5>Summary</h5><pre>' + esc(m.summary) + '</pre>';
     if (m.actions && m.actions.length) {
       html += '<h5>Action Items</h5><ul>';
@@ -176,8 +228,10 @@ function renderHistory() {
         html += '</div>';
       });
     }
+    html += '<h5>Transcript</h5><pre>' + esc(m.transcript) + '</pre>';
+    html += '<div class="history-actions"><button class="btn-dl-sm" onclick="downloadHistoryItem(' + m.id + ')">Download Package</button></div>';
     html += '</div></div>';
-  }
+  });
   el.innerHTML = html;
 }
 function toggleDetail(el) {
@@ -294,17 +348,14 @@ async function doSummarize() {
   document.getElementById('summary-box').style.display = 'block';
   document.getElementById('status').textContent = '';
 
-  // Save meeting data for download
+  // Save to history (also sets lastMeeting for download)
   lastMeeting = {
     title: title,
     transcript: transcript,
     summary: data.summary,
     actions: data.actions || [],
-    prompts: data.prompts || [],
-    date: new Date().toLocaleString()
+    prompts: data.prompts || []
   };
-
-  // Save to history
   saveToHistory(lastMeeting);
 }
 
@@ -335,53 +386,7 @@ function continueMeeting() {
 // Download meeting package as .txt
 function downloadPackage() {
   if (!lastMeeting) return;
-  const m = lastMeeting;
-  let content = '';
-  content += '═══════════════════════════════════════════\n';
-  content += '  ' + m.title + '\n';
-  content += '═══════════════════════════════════════════\n';
-  content += 'Date: ' + m.date + '\n\n';
-
-  content += '───────────────────────────────────────────\n';
-  content += '  TRANSCRIPT\n';
-  content += '───────────────────────────────────────────\n\n';
-  content += m.transcript + '\n\n';
-
-  content += '───────────────────────────────────────────\n';
-  content += '  SUMMARY\n';
-  content += '───────────────────────────────────────────\n\n';
-  content += m.summary + '\n\n';
-
-  content += '───────────────────────────────────────────\n';
-  content += '  ACTION ITEMS\n';
-  content += '───────────────────────────────────────────\n\n';
-  m.actions.forEach((a, i) => {
-    content += '  ' + (i + 1) + '. [ ] ' + a + '\n';
-  });
-  content += '\n';
-
-  if (m.prompts && m.prompts.length) {
-    content += '───────────────────────────────────────────\n';
-    content += '  AI PROMPTS (paste into Claude)\n';
-    content += '───────────────────────────────────────────\n\n';
-    m.prompts.forEach((p, i) => {
-      content += '--- Prompt ' + (i + 1) + ': ' + p.action + ' ---\n\n';
-      content += p.prompt + '\n\n';
-    });
-  }
-
-  // Build filename: Title-Date.txt
-  const dateStr = new Date().toISOString().split('T')[0];
-  const safeTitle = m.title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '-');
-  const filename = safeTitle + '-' + dateStr + '.txt';
-
-  const blob = new Blob([content], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadMeetingFile(lastMeeting);
 }
 
 // Init
