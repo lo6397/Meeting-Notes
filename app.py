@@ -183,6 +183,8 @@ def api_ws_create():
         'priority': d.get('priority', 'medium'),
         'dueDate': d.get('dueDate'),
         'aiPrompt': d.get('aiPrompt'),
+        'department': d.get('department', 'General'),
+        'taskNotes': d.get('taskNotes', []),
         'completed': False,
         'completedAt': None,
         'createdAt': datetime.now().isoformat()
@@ -198,7 +200,7 @@ def api_ws_update(tid):
     for t in tasks:
         if t['id'] == tid:
             d = request.json
-            for k in ['text','priority','dueDate','completed','completedAt','linkedMeetingId','linkedMeetingTitle','linkedMeetingDate']:
+            for k in ['text','priority','dueDate','completed','completedAt','linkedMeetingId','linkedMeetingTitle','linkedMeetingDate','department','taskNotes']:
                 if k in d:
                     t[k] = d[k]
             save_workspace(tasks)
@@ -211,6 +213,56 @@ def api_ws_delete(tid):
     tasks = [t for t in tasks if t['id'] != tid]
     save_workspace(tasks)
     return jsonify({'ok': True})
+
+@app.route('/api/tasks/<tid>/notes', methods=['POST'])
+def api_task_add_note(tid):
+    tasks = load_workspace()
+    for t in tasks:
+        if t['id'] == tid:
+            d = request.json
+            note = {
+                'text': d.get('text', '').strip(),
+                'type': d.get('type', 'update'),
+                'createdAt': datetime.now().isoformat(),
+                'editedAt': None
+            }
+            if 'taskNotes' not in t:
+                t['taskNotes'] = []
+            t['taskNotes'].append(note)
+            save_workspace(tasks)
+            return jsonify(t)
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/api/tasks/<tid>/notes/<int:nidx>', methods=['PUT'])
+def api_task_edit_note(tid, nidx):
+    tasks = load_workspace()
+    for t in tasks:
+        if t['id'] == tid:
+            notes = t.get('taskNotes', [])
+            if 0 <= nidx < len(notes):
+                d = request.json
+                if 'text' in d:
+                    notes[nidx]['text'] = d['text']
+                if 'type' in d:
+                    notes[nidx]['type'] = d['type']
+                notes[nidx]['editedAt'] = datetime.now().isoformat()
+                save_workspace(tasks)
+                return jsonify(t)
+            return jsonify({'error': 'Note not found'}), 404
+    return jsonify({'error': 'Task not found'}), 404
+
+@app.route('/api/tasks/<tid>/notes/<int:nidx>', methods=['DELETE'])
+def api_task_delete_note(tid, nidx):
+    tasks = load_workspace()
+    for t in tasks:
+        if t['id'] == tid:
+            notes = t.get('taskNotes', [])
+            if 0 <= nidx < len(notes):
+                notes.pop(nidx)
+                save_workspace(tasks)
+                return jsonify(t)
+            return jsonify({'error': 'Note not found'}), 404
+    return jsonify({'error': 'Task not found'}), 404
 
 @app.route('/api/tasks/<tid>/link-meeting', methods=['POST'])
 def api_link_task(tid):
@@ -459,6 +511,35 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 /* Ask Claude button */
 .btn-ask{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-ask:hover{opacity:.85}
+/* Departments */
+.ws-tag-dept-Clinical{background:#dbeafe;color:#1e40af}
+.ws-tag-dept-Operations{background:#ede9fe;color:#6b21a8}
+.ws-tag-dept-HR{background:#fce7f3;color:#9d174d}
+.ws-tag-dept-Finance{background:#dcfce7;color:#166534}
+.ws-tag-dept-Business{background:#ffedd5;color:#9a3412}
+.ws-tag-dept-General{background:#f3f4f6;color:#4b5563}
+.ws-dept-select{font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;background:#fff}
+.ws-dept-header{font-size:13px;font-weight:700;color:#555;padding:8px 0 4px;border-bottom:1px solid #eee;margin-top:8px}
+/* Task Notes */
+.ws-notes-toggle{background:none;border:none;font-size:12px;color:#1a4fa3;cursor:pointer;padding:2px 0;font-weight:600}
+.ws-notes-toggle:hover{text-decoration:underline}
+.ws-notes-panel{margin-top:8px;padding:8px;background:#fafafa;border-radius:6px;border:1px solid #eee}
+.ws-note-card{border-left:3px solid #ddd;padding:6px 10px;margin-bottom:6px;border-radius:0 4px 4px 0;font-size:13px;background:#fff}
+.ws-note-card.type-update{border-left-color:#1a4fa3}
+.ws-note-card.type-decision{border-left-color:#28a745}
+.ws-note-card.type-blocker{border-left-color:#dc3535}
+.ws-note-card.type-context{border-left-color:#888}
+.ws-note-card.type-follow-up{border-left-color:#e67e22}
+.ws-note-meta{font-size:11px;color:#888;margin-top:2px;display:flex;gap:8px;align-items:center}
+.ws-note-type{font-size:10px;font-weight:700;text-transform:uppercase;padding:1px 6px;border-radius:3px}
+.nt-update{background:#dbeafe;color:#1e40af}.nt-decision{background:#dcfce7;color:#166534}
+.nt-blocker{background:#fce7f3;color:#9d174d}.nt-context{background:#f3f4f6;color:#4b5563}
+.nt-follow-up{background:#ffedd5;color:#9a3412}
+.ws-note-form{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.ws-note-form textarea{min-height:50px;max-height:100px;font-size:13px}
+.ws-note-form select{font-size:12px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;width:auto}
+.ws-note-form-row{display:flex;gap:6px;align-items:center}
+.ws-latest-note{font-size:12px;color:#888;margin-top:2px;font-style:italic}
 /* Link & Agenda */
 .link-dropdown{position:absolute;top:100%;right:0;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:50;width:260px;max-height:250px;overflow-y:auto}
 .link-dropdown .link-item{padding:6px 8px;cursor:pointer;border-radius:4px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
@@ -598,6 +679,13 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <button class="ws-filter" onclick="setWsFilter('overdue')">Overdue</button>
     <button class="ws-filter" onclick="setWsFilter('this-week')">This Week</button>
     <button class="ws-filter" onclick="setWsFilter('completed')">Completed</button>
+    <span style="color:#ccc;margin:0 2px">|</span>
+    <button class="ws-filter" onclick="setWsFilter('dept-Clinical')">Clinical</button>
+    <button class="ws-filter" onclick="setWsFilter('dept-Operations')">Operations</button>
+    <button class="ws-filter" onclick="setWsFilter('dept-HR')">HR</button>
+    <button class="ws-filter" onclick="setWsFilter('dept-Finance')">Finance</button>
+    <button class="ws-filter" onclick="setWsFilter('dept-Business Development')">Biz Dev</button>
+    <button class="ws-filter" onclick="setWsFilter('dept-General')">General</button>
   </div>
   <div class="ws-sort-bar">
     <span>Sort by:</span>
@@ -605,6 +693,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <button class="ws-sort-btn" onclick="setWsSort('due')">Due Date</button>
     <button class="ws-sort-btn" onclick="setWsSort('added')">Date Added</button>
     <button class="ws-sort-btn" onclick="setWsSort('alpha')">A-Z</button>
+    <button class="ws-sort-btn" onclick="setWsSort('department')">Department</button>
   </div>
   <div class="ws-add-form">
     <input type="text" id="wsNewTask" placeholder="Add a new task..." onkeydown="if(event.key==='Enter')addManualTask()">
@@ -1260,7 +1349,12 @@ function filterTasks(tasks) {
     case 'overdue': return tasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate<todayStr;});
     case 'this-week': return tasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate>=todayStr && t.dueDate<=weekEnd;});
     case 'completed': return tasks.filter(function(t){return t.completed;});
-    default: return tasks;
+    default:
+      if (wsFilter.startsWith('dept-')) {
+        var dept = wsFilter.substring(5);
+        return tasks.filter(function(t){return (t.department||'General')===dept;});
+      }
+      return tasks;
   }
 }
 
@@ -1290,10 +1384,21 @@ function renderWorkspace() {
     case 'due': open.sort(function(a,b){return (a.dueDate||'9999')< (b.dueDate||'9999')?-1:1;}); break;
     case 'added': open.sort(function(a,b){return (b.createdAt||'').localeCompare(a.createdAt||'');}); break;
     case 'alpha': open.sort(function(a,b){return (a.text||'').toLowerCase().localeCompare((b.text||'').toLowerCase());}); break;
+    case 'department': open.sort(function(a,b){return (a.department||'General').localeCompare(b.department||'General');}); break;
   }
 
   var el = document.getElementById('wsList');
   if (!open.length && wsFilter !== 'completed') { el.innerHTML = '<div class="empty">No tasks match this filter.</div>'; }
+  else if (wsSort === 'department') {
+    var groups = {};
+    open.forEach(function(t) { var d = t.department || 'General'; if (!groups[d]) groups[d] = []; groups[d].push(t); });
+    var gh = '';
+    Object.keys(groups).sort().forEach(function(d) {
+      gh += '<div class="ws-dept-header">' + d + ' (' + groups[d].length + ')</div>';
+      gh += groups[d].map(renderTaskCard).join('');
+    });
+    el.innerHTML = gh;
+  }
   else { el.innerHTML = open.map(renderTaskCard).join(''); }
 
   var toggle = document.getElementById('wsCompletedToggle');
@@ -1315,6 +1420,10 @@ function renderTaskCard(t) {
   html += '<div class="ws-task-text">' + escHtml(t.text) + '</div>';
   html += '<div class="ws-task-meta">';
   html += '<span class="ws-tag ws-tag-source">From: ' + escHtml(t.source) + '</span>';
+  // Department badge
+  var dept = t.department || 'General';
+  var deptKey = dept.split(' ')[0]; // "Business Development" -> "Business"
+  html += '<span class="ws-tag ws-tag-dept-' + deptKey + '">' + dept + '</span>';
   // Clickable priority badge
   var pLabel = {high:'High',medium:'Medium',low:'Low'}[t.priority||'medium'] || 'Medium';
   if (!t.completed) {
@@ -1333,9 +1442,25 @@ function renderTaskCard(t) {
     html += '<span class="ws-tag ws-tag-linked" onclick="unlinkTask(\'' + t.id + '\')" title="Click to unlink">&#128197; ' + escHtml(t.linkedMeetingTitle) + (t.linkedMeetingDate ? ' - ' + t.linkedMeetingDate : '') + ' &times;</span>';
   }
   html += '<span style="font-size:11px;color:#aaa">' + (t.createdAt||'').split('T')[0] + '</span>';
-  html += '</div></div>';
+  html += '</div>';
+  // Latest note preview
+  var notes = t.taskNotes || [];
+  if (notes.length) {
+    var latest = notes[notes.length - 1];
+    var preview = (latest.text || '').substring(0, 60) + ((latest.text || '').length > 60 ? '...' : '');
+    html += '<div class="ws-latest-note">&#128172; Latest: ' + escHtml(preview) + '</div>';
+  }
+  // Notes toggle
+  html += '<button class="ws-notes-toggle" onclick="event.stopPropagation();toggleTaskNotes(\'' + t.id + '\',this)">&#128221; Notes (' + notes.length + ')</button>';
+  html += '<div class="ws-notes-panel" id="notes-' + t.id + '" style="display:none"></div>';
+  html += '</div>';
   html += '<div class="ws-task-actions">';
   if (!t.completed) {
+    html += '<select class="ws-dept-select" onchange="updateWsDept(\'' + t.id + '\',this.value)" title="Department">';
+    ['Clinical','Operations','HR','Finance','Business Development','General'].forEach(function(d) {
+      html += '<option value="'+d+'"'+(dept===d?' selected':'')+'>'+d+'</option>';
+    });
+    html += '</select>';
     html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
     html += '<button class="btn btn-sm btn-outline" onclick="showLinkDropdown(\'' + t.id + '\',this)" title="Link to meeting">&#128197;</button>';
     html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">Ask Claude &#10024;</button>';
@@ -1780,6 +1905,79 @@ function downloadAgenda() {
 function sendAgendaToChat() {
   hideAgendaModal();
   sendToClaudeChat(currentAgendaText, 'Agenda: ' + currentAgendaMeetingTitle);
+}
+
+// --- Department ---
+async function updateWsDept(id, val) {
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ department:val }) });
+  var t = allTasks.find(function(x){return x.id===id;}); if (t) t.department = val;
+  renderWorkspace();
+}
+
+// --- Task Notes ---
+function toggleTaskNotes(taskId, btn) {
+  var panel = document.getElementById('notes-' + taskId);
+  if (panel.style.display === 'none') {
+    panel.style.display = '';
+    renderTaskNotes(taskId);
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function renderTaskNotes(taskId) {
+  var t = allTasks.find(function(x){return x.id===taskId;});
+  if (!t) return;
+  var notes = t.taskNotes || [];
+  var panel = document.getElementById('notes-' + taskId);
+  var html = '';
+  notes.forEach(function(n, i) {
+    var typeClass = 'type-' + (n.type || 'update');
+    var ntClass = 'nt-' + (n.type || 'update');
+    var dateStr = n.createdAt ? new Date(n.createdAt).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+    html += '<div class="ws-note-card ' + typeClass + '">';
+    html += '<div>' + escHtml(n.text) + '</div>';
+    html += '<div class="ws-note-meta">';
+    html += '<span class="ws-note-type ' + ntClass + '">' + (n.type || 'update') + '</span>';
+    html += '<span>' + dateStr + '</span>';
+    if (n.editedAt) html += '<span>(edited)</span>';
+    html += '<button style="background:none;border:none;color:#1a4fa3;font-size:11px;cursor:pointer" onclick="deleteTaskNote(\'' + taskId + '\',' + i + ')">delete</button>';
+    html += '</div></div>';
+  });
+  // Add note form
+  html += '<div class="ws-note-form">';
+  html += '<textarea id="note-text-' + taskId + '" placeholder="Add update or context..."></textarea>';
+  html += '<div class="ws-note-form-row">';
+  html += '<select id="note-type-' + taskId + '">';
+  ['update','decision','blocker','context','follow-up'].forEach(function(tp) {
+    html += '<option value="'+tp+'">'+tp.charAt(0).toUpperCase()+tp.slice(1)+'</option>';
+  });
+  html += '</select>';
+  html += '<button class="btn btn-sm btn-blue" onclick="addTaskNote(\'' + taskId + '\')">Save Note</button>';
+  html += '</div></div>';
+  panel.innerHTML = html;
+}
+
+async function addTaskNote(taskId) {
+  var text = document.getElementById('note-text-' + taskId).value.trim();
+  if (!text) return;
+  var type = document.getElementById('note-type-' + taskId).value;
+  var res = await fetch('/api/tasks/' + taskId + '/notes', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ text: text, type: type })
+  });
+  var updated = await res.json();
+  var t = allTasks.find(function(x){return x.id===taskId;});
+  if (t && updated.taskNotes) t.taskNotes = updated.taskNotes;
+  renderTaskNotes(taskId);
+}
+
+async function deleteTaskNote(taskId, noteIdx) {
+  await fetch('/api/tasks/' + taskId + '/notes/' + noteIdx, { method: 'DELETE' });
+  var t = allTasks.find(function(x){return x.id===taskId;});
+  if (t && t.taskNotes) t.taskNotes.splice(noteIdx, 1);
+  renderTaskNotes(taskId);
 }
 
 // --- Init ---
