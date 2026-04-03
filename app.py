@@ -511,6 +511,21 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 /* Ask Claude button */
 .btn-ask{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-ask:hover{opacity:.85}
+/* Action Items Bulk */
+.ai-header{display:flex;align-items:center;gap:10px;margin:14px 0 8px;flex-wrap:wrap}
+.ai-header h3{margin:0;color:#1a4fa3;font-size:.95rem}
+.ai-header .ai-count{font-size:13px;color:#888;font-weight:400}
+.ai-header label{font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px;color:#555}
+.ai-header label input{width:15px;height:15px}
+.ai-bulk-btn{background:#28a745;color:#fff;border:none;border-radius:5px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.ai-bulk-btn:hover{background:#1e7e34}
+.ai-bulk-btn:disabled{opacity:.4;cursor:not-allowed}
+.ai-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:14px}
+.ai-item:last-child{border-bottom:none}
+.ai-item input[type=checkbox]{width:16px;height:16px;flex-shrink:0}
+.ai-item .ai-icon{font-size:14px;flex-shrink:0}
+.ai-item .ai-text{flex:1}
+.ai-selected-bar{margin-top:8px;display:flex;gap:8px;align-items:center}
 /* Departments */
 .ws-tag-dept-Clinical{background:#dbeafe;color:#1e40af}
 .ws-tag-dept-Operations{background:#ede9fe;color:#6b21a8}
@@ -651,8 +666,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
       <div id="resultArea" class="result-section" style="display:none">
         <h3>Summary</h3>
         <pre id="summaryText"></pre>
-        <h3>Action Items</h3>
-        <ul id="actionList"></ul>
+        <div id="actionSection"></div>
         <div id="promptsArea" style="display:none">
           <h3>AI Prompts</h3>
           <p style="font-size:12px;color:#888;margin-bottom:8px">Ready-to-paste prompts for Claude</p>
@@ -978,22 +992,45 @@ function selectMeeting(id) {
   renderToday();
 }
 
+var _showResultsMeeting = null;
+
 function showResults(m) {
+  _showResultsMeeting = m;
   document.getElementById('summaryText').textContent = m.summary || '';
-  var list = document.getElementById('actionList');
-  list.innerHTML = '';
-  (m.actions||[]).forEach(function(a, idx) {
-    var li = document.createElement('li');
-    li.style.cssText = 'display:flex;align-items:center;gap:8px';
-    li.innerHTML = '<span style="flex:1">' + escHtml(a) + '</span>';
-    var inWs = wsTaskExists(a, m.id);
-    var btn = document.createElement('button');
-    btn.className = 'action-add-btn' + (inWs ? ' added' : '');
-    btn.textContent = inWs ? '\u2713 In Workspace' : '+ Workspace';
-    if (!inWs) btn.onclick = function() { addToWorkspace(a, m.title, m.id, btn, m.prompts); };
-    li.appendChild(btn);
-    list.appendChild(li);
-  });
+
+  // --- Action Items with bulk controls ---
+  var actions = m.actions || [];
+  var section = document.getElementById('actionSection');
+  var html = '';
+  if (actions.length) {
+    html += '<div class="ai-header">';
+    html += '<h3>Action Items <span class="ai-count">(' + actions.length + ')</span></h3>';
+    html += '<label><input type="checkbox" id="aiSelectAll" onchange="aiToggleAll(this.checked)"> Select All</label>';
+    html += '<button class="ai-bulk-btn" onclick="aiAddAllToWorkspace()">+ Add All to Workspace</button>';
+    html += '</div>';
+    actions.forEach(function(a, idx) {
+      var inWs = wsTaskExists(a, m.id);
+      html += '<div class="ai-item">';
+      html += '<input type="checkbox" class="ai-cb" data-idx="' + idx + '" onchange="aiUpdateSelectedCount()">';
+      html += '<span class="ai-icon">&#128203;</span>';
+      html += '<span class="ai-text">' + escHtml(a) + '</span>';
+      if (inWs) {
+        html += '<span class="action-add-btn added" style="cursor:default">\u2713 In Workspace</span>';
+      } else {
+        html += '<button class="action-add-btn" onclick="aiAddSingle(' + idx + ',this)">+ Add</button>';
+      }
+      html += '</div>';
+    });
+    html += '<div class="ai-selected-bar" id="aiSelectedBar" style="display:none">';
+    html += '<button class="ai-bulk-btn" onclick="aiAddSelectedToWorkspace()" id="aiAddSelectedBtn">+ Add Selected to Workspace</button>';
+    html += '</div>';
+  } else {
+    html += '<h3 style="color:#1a4fa3;font-size:.95rem;margin:14px 0 8px">Action Items <span style="color:#888;font-weight:400">(0)</span></h3>';
+    html += '<div class="empty" style="padding:10px">No action items.</div>';
+  }
+  section.innerHTML = html;
+
+  // --- AI Prompts ---
   var pa = document.getElementById('promptsArea');
   var pl = document.getElementById('promptsList');
   if (m.prompts && m.prompts.length) {
@@ -1007,6 +1044,57 @@ function showResults(m) {
     pa.style.display = '';
   } else { pa.style.display = 'none'; }
   document.getElementById('resultArea').style.display = '';
+}
+
+function aiToggleAll(checked) {
+  document.querySelectorAll('.ai-cb').forEach(function(cb) { cb.checked = checked; });
+  aiUpdateSelectedCount();
+}
+
+function aiUpdateSelectedCount() {
+  var checked = document.querySelectorAll('.ai-cb:checked').length;
+  var bar = document.getElementById('aiSelectedBar');
+  var btn = document.getElementById('aiAddSelectedBtn');
+  if (checked > 0) {
+    bar.style.display = '';
+    btn.textContent = '+ Add ' + checked + ' Selected to Workspace';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function aiAddSingle(idx, btnEl) {
+  var m = _showResultsMeeting;
+  if (!m || !m.actions[idx]) return;
+  var a = m.actions[idx];
+  addToWorkspace(a, m.title, m.id, btnEl, m.prompts);
+}
+
+function aiAddAllToWorkspace() {
+  var m = _showResultsMeeting;
+  if (!m) return;
+  var added = 0;
+  (m.actions || []).forEach(function(a, idx) {
+    if (!wsTaskExists(a, m.id)) {
+      addToWorkspace(a, m.title, m.id, null, m.prompts);
+      added++;
+    }
+  });
+  // Re-render to show updated badges
+  setTimeout(function() { showResults(m); }, 500);
+}
+
+function aiAddSelectedToWorkspace() {
+  var m = _showResultsMeeting;
+  if (!m) return;
+  document.querySelectorAll('.ai-cb:checked').forEach(function(cb) {
+    var idx = parseInt(cb.getAttribute('data-idx'));
+    var a = m.actions[idx];
+    if (a && !wsTaskExists(a, m.id)) {
+      addToWorkspace(a, m.title, m.id, null, m.prompts);
+    }
+  });
+  setTimeout(function() { showResults(m); }, 500);
 }
 
 function clearRight() {
