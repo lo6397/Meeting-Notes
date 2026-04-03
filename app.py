@@ -6,6 +6,7 @@ from datetime import datetime, date
 app = Flask(__name__)
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'meetings.json')
 EOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eod_summaries.json')
+WORKSPACE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'workspace.json')
 
 def load_meetings():
     if os.path.exists(DATA_FILE):
@@ -115,6 +116,62 @@ def api_eod_delete(eid):
     summaries = load_eod()
     summaries = [s for s in summaries if s['id'] != eid]
     save_eod(summaries)
+    return jsonify({'ok': True})
+
+def load_workspace():
+    if os.path.exists(WORKSPACE_FILE):
+        try:
+            with open(WORKSPACE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_workspace(tasks):
+    with open(WORKSPACE_FILE, 'w') as f:
+        json.dump(tasks, f, indent=2)
+
+@app.route('/api/workspace', methods=['GET'])
+def api_ws_list():
+    return jsonify(load_workspace())
+
+@app.route('/api/workspace', methods=['POST'])
+def api_ws_create():
+    d = request.json
+    task = {
+        'id': str(uuid.uuid4())[:8],
+        'text': d.get('text', '').strip(),
+        'source': d.get('source', 'manual'),
+        'meetingId': d.get('meetingId'),
+        'priority': d.get('priority', 'medium'),
+        'dueDate': d.get('dueDate'),
+        'completed': False,
+        'completedAt': None,
+        'createdAt': datetime.now().isoformat()
+    }
+    tasks = load_workspace()
+    tasks.append(task)
+    save_workspace(tasks)
+    return jsonify(task)
+
+@app.route('/api/workspace/<tid>', methods=['PUT'])
+def api_ws_update(tid):
+    tasks = load_workspace()
+    for t in tasks:
+        if t['id'] == tid:
+            d = request.json
+            for k in ['text','priority','dueDate','completed','completedAt']:
+                if k in d:
+                    t[k] = d[k]
+            save_workspace(tasks)
+            return jsonify(t)
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/api/workspace/<tid>', methods=['DELETE'])
+def api_ws_delete(tid):
+    tasks = load_workspace()
+    tasks = [t for t in tasks if t['id'] != tid]
+    save_workspace(tasks)
     return jsonify({'ok': True})
 
 @app.route('/summarize', methods=['POST'])
@@ -234,6 +291,40 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .modal{background:#fff;border-radius:10px;padding:24px;width:440px;max-width:95vw;box-shadow:0 8px 30px rgba(0,0,0,.15)}
 .modal h2{font-size:1.1rem;margin-bottom:8px}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+/* Tabs */
+.app-tabs{display:flex;gap:0;margin-bottom:0;border-bottom:2px solid #ddd}
+.app-tab{padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;border:none;background:none;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px}
+.app-tab.active{color:#1a4fa3;border-bottom-color:#1a4fa3}
+.app-tab:hover{color:#1a4fa3}
+.tab-content{display:none}.tab-content.active{display:block}
+/* Workspace */
+.ws-stats{display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.ws-stat{background:#fff;border-radius:8px;padding:10px 16px;box-shadow:0 1px 3px rgba(0,0,0,.05);text-align:center;flex:1;min-width:100px}
+.ws-stat .num{font-size:1.3rem;font-weight:700;color:#1a4fa3}.ws-stat .label{font-size:11px;color:#888}
+.ws-filters{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.ws-filter{padding:5px 12px;font-size:12px;border-radius:15px;border:1px solid #ddd;background:#fff;cursor:pointer;font-weight:600;color:#555}
+.ws-filter.active{background:#1a4fa3;color:#fff;border-color:#1a4fa3}
+.ws-task{display:flex;align-items:flex-start;gap:10px;background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.ws-task.done{opacity:.5}
+.ws-task input[type=checkbox]{margin-top:4px;width:18px;height:18px;flex-shrink:0}
+.ws-task-body{flex:1}
+.ws-task-text{font-size:14px}
+.ws-task-meta{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
+.ws-tag{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
+.ws-tag-source{background:#e9ecef;color:#555}
+.ws-tag-date{background:#fff3cd;color:#856404}
+.ws-tag-high{background:#f8d7da;color:#721c24}
+.ws-tag-medium{background:#fff3cd;color:#856404}
+.ws-tag-low{background:#d4edda;color:#155724}
+.ws-task-actions{display:flex;gap:4px;flex-shrink:0;align-items:center}
+.ws-task-actions select{font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px}
+.ws-task-actions input[type=date]{font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px}
+.ws-completed-toggle{background:none;border:none;color:#1a4fa3;font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;display:block}
+.ws-add-form{display:flex;gap:8px;margin-bottom:16px}
+.ws-add-form input[type=text]{flex:1}
+.action-add-btn{background:#28a745;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.action-add-btn:hover{background:#1e7e34}
+.action-add-btn.added{background:#6c757d;cursor:default}
 /* EOD */
 .eod-btn{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
 .eod-btn:hover{opacity:.9}
@@ -279,6 +370,13 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <p style="font-size:12px;color:#888;margin-top:4px">Saved in your browser only.</p>
 </div>
 
+<div class="app-tabs">
+  <button class="app-tab active" onclick="switchAppTab('meetings')">Today's Meetings</button>
+  <button class="app-tab" onclick="switchAppTab('workspace')">Workspace</button>
+  <button class="app-tab" onclick="switchAppTab('past')">Past Meetings</button>
+</div>
+
+<div id="tab-meetings" class="tab-content active">
 <div class="main">
   <div class="left-panel">
     <div class="panel-title" id="todayLabel">Today's Meetings</div>
@@ -322,8 +420,29 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     </div>
   </div>
 </div>
+</div><!-- end tab-meetings -->
 
-<div class="past-section">
+<div id="tab-workspace" class="tab-content">
+  <div class="ws-stats" id="wsStats"></div>
+  <div class="ws-filters" id="wsFilters">
+    <button class="ws-filter active" onclick="setWsFilter('all')">All</button>
+    <button class="ws-filter" onclick="setWsFilter('high')">High Priority</button>
+    <button class="ws-filter" onclick="setWsFilter('due-today')">Due Today</button>
+    <button class="ws-filter" onclick="setWsFilter('this-week')">This Week</button>
+    <button class="ws-filter" onclick="setWsFilter('incomplete')">Incomplete</button>
+    <button class="ws-filter" onclick="setWsFilter('completed')">Completed</button>
+  </div>
+  <div class="ws-add-form">
+    <input type="text" id="wsNewTask" placeholder="Add a new task..." onkeydown="if(event.key==='Enter')addManualTask()">
+    <button class="btn btn-start" onclick="addManualTask()">+ Add</button>
+  </div>
+  <div id="wsList"></div>
+  <button class="ws-completed-toggle" id="wsCompletedToggle" onclick="toggleCompletedTasks()" style="display:none"></button>
+  <div id="wsCompletedList" style="display:none"></div>
+</div>
+
+<div id="tab-past" class="tab-content">
+<div class="past-section" style="margin-top:0">
   <h2>Past Meetings</h2>
   <div class="search-box"><input type="text" id="searchBox" placeholder="Search by title or date..." oninput="searchPast(this.value)"></div>
   <div id="pastList"><div class="empty">No past meetings yet.</div></div>
@@ -345,6 +464,8 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
         <button class="btn btn-sm btn-gray" onclick="eodClearAll()">Clear All</button>
       </div>
       <div id="eodActions"><div class="empty">No completed meetings today.</div></div>
+      <h4 style="margin-top:16px;color:#6f42c1;font-size:.9rem">Carry-over Tasks from Workspace</h4>
+      <div id="eodCarryover"><div class="empty" style="font-size:13px">No incomplete workspace tasks.</div></div>
     </div>
     <div class="eod-right">
       <h3 style="margin-bottom:10px">Schedule Inputs</h3>
@@ -560,7 +681,18 @@ function showResults(m) {
   document.getElementById('summaryText').textContent = m.summary || '';
   var list = document.getElementById('actionList');
   list.innerHTML = '';
-  (m.actions||[]).forEach(function(a) { var li = document.createElement('li'); li.textContent = a; list.appendChild(li); });
+  (m.actions||[]).forEach(function(a, idx) {
+    var li = document.createElement('li');
+    li.style.cssText = 'display:flex;align-items:center;gap:8px';
+    li.innerHTML = '<span style="flex:1">' + escHtml(a) + '</span>';
+    var inWs = wsTaskExists(a, m.id);
+    var btn = document.createElement('button');
+    btn.className = 'action-add-btn' + (inWs ? ' added' : '');
+    btn.textContent = inWs ? '\u2713 In Workspace' : '+ Workspace';
+    if (!inWs) btn.onclick = function() { addToWorkspace(a, m.title, m.id, btn); };
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
   var pa = document.getElementById('promptsArea');
   var pl = document.getElementById('promptsList');
   if (m.prompts && m.prompts.length) {
@@ -787,6 +919,167 @@ async function deleteMeeting(id) {
   renderToday(); renderPast();
 }
 
+// --- App Tabs ---
+function switchAppTab(tab) {
+  document.querySelectorAll('.app-tab').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+  document.getElementById('tab-' + tab).classList.add('active');
+  var tabs = document.querySelectorAll('.app-tab');
+  if (tab === 'meetings') tabs[0].classList.add('active');
+  else if (tab === 'workspace') { tabs[1].classList.add('active'); renderWorkspace(); }
+  else if (tab === 'past') tabs[2].classList.add('active');
+}
+
+// --- Workspace ---
+var allTasks = [];
+var wsFilter = 'all';
+var showCompleted = false;
+
+async function loadWorkspace() {
+  try { var r = await fetch('/api/workspace'); allTasks = await r.json(); } catch(e) { allTasks = []; }
+}
+
+function wsTaskExists(text, meetingId) {
+  return allTasks.some(function(t) { return t.text === text && t.meetingId === meetingId; });
+}
+
+async function addToWorkspace(text, source, meetingId, btn) {
+  var res = await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text:text, source:source, meetingId:meetingId, priority:'medium' }) });
+  var task = await res.json();
+  allTasks.push(task);
+  if (btn) { btn.textContent = '\u2713 In Workspace'; btn.classList.add('added'); btn.onclick = null; }
+}
+
+async function addManualTask() {
+  var input = document.getElementById('wsNewTask');
+  var text = input.value.trim();
+  if (!text) return;
+  await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text:text, source:'manual', priority:'medium' }) });
+  input.value = '';
+  await loadWorkspace();
+  renderWorkspace();
+}
+
+async function toggleWsTask(id) {
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (!t) return;
+  var now = t.completed ? null : new Date().toISOString();
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ completed:!t.completed, completedAt:now }) });
+  t.completed = !t.completed;
+  t.completedAt = now;
+  renderWorkspace();
+}
+
+async function updateWsPriority(id, val) {
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ priority:val }) });
+  var t = allTasks.find(function(x){return x.id===id;}); if (t) t.priority = val;
+  renderWorkspace();
+}
+
+async function updateWsDue(id, val) {
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ dueDate:val||null }) });
+  var t = allTasks.find(function(x){return x.id===id;}); if (t) t.dueDate = val||null;
+  renderWorkspace();
+}
+
+async function deleteWsTask(id) {
+  await fetch('/api/workspace/'+id, { method:'DELETE' });
+  allTasks = allTasks.filter(function(t){return t.id!==id;});
+  renderWorkspace();
+}
+
+function setWsFilter(f) {
+  wsFilter = f;
+  document.querySelectorAll('.ws-filter').forEach(function(b) { b.classList.remove('active'); });
+  event.target.classList.add('active');
+  renderWorkspace();
+}
+
+function toggleCompletedTasks() {
+  showCompleted = !showCompleted;
+  renderWorkspace();
+}
+
+function getWeekEnd() {
+  var d = new Date(); var day = d.getDay(); var diff = 7 - day;
+  d.setDate(d.getDate() + diff); return d.toISOString().split('T')[0];
+}
+
+function filterTasks(tasks) {
+  var todayStr = today();
+  var weekEnd = getWeekEnd();
+  switch(wsFilter) {
+    case 'high': return tasks.filter(function(t){return !t.completed && t.priority==='high';});
+    case 'due-today': return tasks.filter(function(t){return !t.completed && t.dueDate===todayStr;});
+    case 'this-week': return tasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate>=todayStr && t.dueDate<=weekEnd;});
+    case 'incomplete': return tasks.filter(function(t){return !t.completed;});
+    case 'completed': return tasks.filter(function(t){return t.completed;});
+    default: return tasks;
+  }
+}
+
+function renderWorkspace() {
+  var todayStr = today();
+  var weekEnd = getWeekEnd();
+  var incomplete = allTasks.filter(function(t){return !t.completed;});
+  var dueToday = allTasks.filter(function(t){return !t.completed && t.dueDate===todayStr;});
+  var highP = allTasks.filter(function(t){return !t.completed && t.priority==='high';});
+  var weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  var completedWeek = allTasks.filter(function(t){return t.completed && t.completedAt && t.completedAt>=weekStart.toISOString();});
+  document.getElementById('wsStats').innerHTML =
+    '<div class="ws-stat"><div class="num">'+incomplete.length+'</div><div class="label">Open Tasks</div></div>'
+    +'<div class="ws-stat"><div class="num">'+dueToday.length+'</div><div class="label">Due Today</div></div>'
+    +'<div class="ws-stat"><div class="num">'+highP.length+'</div><div class="label">High Priority</div></div>'
+    +'<div class="ws-stat"><div class="num">'+completedWeek.length+'</div><div class="label">Done This Week</div></div>';
+
+  var filtered = filterTasks(allTasks);
+  var open = filtered.filter(function(t){return !t.completed;});
+  var done = filtered.filter(function(t){return t.completed;});
+  open.sort(function(a,b) { var po = {high:0,medium:1,low:2}; return (po[a.priority]||1)-(po[b.priority]||1); });
+
+  var el = document.getElementById('wsList');
+  if (!open.length && wsFilter !== 'completed') { el.innerHTML = '<div class="empty">No tasks match this filter.</div>'; }
+  else { el.innerHTML = open.map(renderTaskCard).join(''); }
+
+  var toggle = document.getElementById('wsCompletedToggle');
+  var cList = document.getElementById('wsCompletedList');
+  if (done.length) {
+    toggle.style.display = '';
+    toggle.textContent = (showCompleted ? '\u25BC' : '\u25B6') + ' Completed (' + done.length + ')';
+    cList.style.display = showCompleted ? '' : 'none';
+    cList.innerHTML = done.map(renderTaskCard).join('');
+  } else { toggle.style.display = 'none'; cList.style.display = 'none'; }
+}
+
+function renderTaskCard(t) {
+  var cls = 'ws-task' + (t.completed ? ' done' : '');
+  var html = '<div class="' + cls + '">';
+  html += '<input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onchange="toggleWsTask(\'' + t.id + '\')">';
+  html += '<div class="ws-task-body">';
+  html += '<div class="ws-task-text">' + escHtml(t.text) + '</div>';
+  html += '<div class="ws-task-meta">';
+  html += '<span class="ws-tag ws-tag-source">From: ' + escHtml(t.source) + '</span>';
+  html += '<span class="ws-tag ws-tag-' + t.priority + '">' + t.priority + '</span>';
+  if (t.dueDate) html += '<span class="ws-tag ws-tag-date">Due: ' + t.dueDate + '</span>';
+  html += '<span style="font-size:11px;color:#aaa">' + (t.createdAt||'').split('T')[0] + '</span>';
+  html += '</div></div>';
+  html += '<div class="ws-task-actions">';
+  if (!t.completed) {
+    html += '<select onchange="updateWsPriority(\'' + t.id + '\',this.value)">';
+    ['high','medium','low'].forEach(function(p) { html += '<option value="'+p+'"'+(t.priority===p?' selected':'')+'>'+p+'</option>'; });
+    html += '</select>';
+    html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)">';
+  }
+  html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
+  html += '</div></div>';
+  return html;
+}
+
 // --- End of Day ---
 var eodPromptGenerated = '';
 
@@ -815,10 +1108,21 @@ function renderEODActions() {
     html += '</div>';
   });
   el.innerHTML = html;
+  // Carry-over workspace tasks
+  var carryover = allTasks.filter(function(t){return !t.completed;});
+  var cel = document.getElementById('eodCarryover');
+  if (!carryover.length) { cel.innerHTML = '<div class="empty" style="font-size:13px">No incomplete workspace tasks.</div>'; }
+  else {
+    var ch = '';
+    carryover.forEach(function(t) {
+      ch += '<div class="eod-item"><input type="checkbox" checked class="eod-ws-cb" data-wsid="' + t.id + '"><span>' + escHtml(t.text) + ' <span class="ws-tag ws-tag-source" style="font-size:10px">'+escHtml(t.source)+'</span></span></div>';
+    });
+    cel.innerHTML = ch;
+  }
 }
 
-function eodSelectAll() { document.querySelectorAll('.eod-cb').forEach(function(cb) { cb.checked = true; }); }
-function eodClearAll() { document.querySelectorAll('.eod-cb').forEach(function(cb) { cb.checked = false; }); }
+function eodSelectAll() { document.querySelectorAll('.eod-cb,.eod-ws-cb').forEach(function(cb) { cb.checked = true; }); }
+function eodClearAll() { document.querySelectorAll('.eod-cb,.eod-ws-cb').forEach(function(cb) { cb.checked = false; }); }
 
 function getSelectedActions() {
   var selected = [];
@@ -841,7 +1145,14 @@ function getTodayMeetingSummaries() {
 
 function generateMasterPrompt() {
   var selected = getSelectedActions();
-  if (!selected.length) { alert('Please select at least one action item.'); return; }
+  // Gather carry-over workspace tasks
+  var carryoverSelected = [];
+  document.querySelectorAll('.eod-ws-cb:checked').forEach(function(cb) {
+    var tid = cb.getAttribute('data-wsid');
+    var t = allTasks.find(function(x){return x.id===tid;});
+    if (t) carryoverSelected.push(t);
+  });
+  if (!selected.length && !carryoverSelected.length) { alert('Please select at least one action item.'); return; }
 
   var startTime = document.getElementById('eodStartTime').value || '08:00';
   var hours = document.getElementById('eodHours').value || '8';
@@ -883,6 +1194,14 @@ function generateMasterPrompt() {
     });
     prompt += '\n';
   });
+
+  if (carryoverSelected.length) {
+    prompt += '=== CARRY-OVER TASKS FROM WORKSPACE ===\n\n';
+    carryoverSelected.forEach(function(t, i) {
+      prompt += '  ' + (num+i) + '. ' + t.text + ' [' + t.priority + ' priority' + (t.dueDate ? ', due ' + t.dueDate : '') + ', from: ' + t.source + ']\n';
+    });
+    prompt += '\n';
+  }
 
   prompt += '=== INSTRUCTIONS ===\n\n';
   prompt += 'Please do the following:\n\n';
@@ -973,6 +1292,7 @@ async function deletePastEOD(id) {
 
 // --- Init ---
 loadMeetings();
+loadWorkspace();
 </script>
 </body>
 </html>
