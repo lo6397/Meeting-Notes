@@ -311,8 +311,8 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .modal h2{font-size:1.1rem;margin-bottom:8px}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 /* Tabs */
-.app-tabs{display:flex;gap:0;margin-bottom:0;border-bottom:2px solid #ddd}
-.app-tab{padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;border:none;background:none;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px}
+.app-tabs{display:flex;gap:0;margin-bottom:0;border-bottom:2px solid #ddd;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.app-tab{padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;flex-shrink:0}
 .app-tab.active{color:#1a4fa3;border-bottom-color:#1a4fa3}
 .app-tab:hover{color:#1a4fa3}
 .tab-content{display:none}.tab-content.active{display:block}
@@ -413,10 +413,10 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 </div>
 
 <div class="app-tabs">
-  <button class="app-tab active" onclick="switchAppTab('meetings')">Today's Meetings</button>
-  <button class="app-tab" onclick="switchAppTab('workspace')">Workspace</button>
-  <button class="app-tab" onclick="switchAppTab('past')">Past Meetings</button>
-  <button class="app-tab" onclick="switchAppTab('chat')" id="chatTabBtn">Claude Chat</button>
+  <button class="app-tab active" onclick="switchAppTab('meetings')">&#128197; Today</button>
+  <button class="app-tab" onclick="switchAppTab('workspace')">&#9745; Workspace</button>
+  <button class="app-tab" onclick="switchAppTab('past')">&#128214; Past</button>
+  <button class="app-tab" onclick="switchAppTab('chat')" id="chatTabBtn">&#128172; Chat</button>
 </div>
 
 <div id="tab-meetings" class="tab-content active">
