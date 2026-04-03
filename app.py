@@ -249,9 +249,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
 header h1{font-size:1.5rem}
 .gear-btn{background:none;border:none;font-size:22px;cursor:pointer;padding:6px}
-.main{display:flex;gap:20px;min-height:500px}
+.main{display:flex;gap:28px;min-height:500px}
 .left-panel{width:340px;flex-shrink:0}
-.right-panel{flex:1;background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.right-panel{flex:1;background:#fff;border-radius:10px;padding:28px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .panel-title{font-size:1rem;color:#555;margin-bottom:12px}
 .today-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer;border-left:4px solid #ccc;transition:all .15s}
 .today-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1)}
@@ -277,7 +277,7 @@ header h1{font-size:1.5rem}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .panel-actions{display:flex;gap:8px;margin-top:14px}
 .panel-actions .btn{flex:1;padding:10px;font-size:14px}
-textarea{width:100%;height:200px;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit;resize:vertical;margin:10px 0}
+textarea{width:100%;min-height:120px;max-height:200px;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit;resize:vertical;margin:10px 0 14px;overflow-y:auto}
 input[type=text],input[type=password],input[type=date],input[type=time]{width:100%;padding:9px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit}
 label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .error{color:#dc3535;font-size:13px;margin:4px 0}
@@ -312,7 +312,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .modal h2{font-size:1.1rem;margin-bottom:8px}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 /* Tabs */
-.app-tabs{display:flex;gap:0;margin-bottom:0;border-bottom:2px solid #ddd;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.app-tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #ddd;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .app-tab{padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;flex-shrink:0}
 .app-tab.active{color:#1a4fa3;border-bottom-color:#1a4fa3}
 .app-tab:hover{color:#1a4fa3}
