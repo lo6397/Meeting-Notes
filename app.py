@@ -268,7 +268,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 <header>
   <h1>Meeting Recorder</h1>
   <div style="display:flex;gap:10px;align-items:center">
-    <button class="eod-btn" onclick="showEOD()">End of Day Review</button>
+    <button class="eod-btn" onclick="showEOD()">&#127769; End of Day Review</button>
     <button class="gear-btn" onclick="toggleSettings()" title="Settings">&#9881;</button>
   </div>
 </header>
