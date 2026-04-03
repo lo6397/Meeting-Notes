@@ -145,6 +145,7 @@ def api_ws_create():
         'meetingId': d.get('meetingId'),
         'priority': d.get('priority', 'medium'),
         'dueDate': d.get('dueDate'),
+        'aiPrompt': d.get('aiPrompt'),
         'completed': False,
         'completedAt': None,
         'createdAt': datetime.now().isoformat()
@@ -758,15 +759,8 @@ function showResults(m) {
     var btn = document.createElement('button');
     btn.className = 'action-add-btn' + (inWs ? ' added' : '');
     btn.textContent = inWs ? '\u2713 In Workspace' : '+ Workspace';
-    if (!inWs) btn.onclick = function() { addToWorkspace(a, m.title, m.id, btn); };
+    if (!inWs) btn.onclick = function() { addToWorkspace(a, m.title, m.id, btn, m.prompts); };
     li.appendChild(btn);
-    var askBtn = document.createElement('button');
-    askBtn.className = 'btn-ask';
-    askBtn.textContent = 'Ask Claude \u2728';
-    askBtn.onclick = (function(action, meeting) { return function() {
-      sendToClaudeChat('I just finished a meeting called "' + meeting.title + '".\nOne of my action items is: ' + action + '\nContext from the meeting: ' + (meeting.summary||'') + '\nPlease help me complete this task. Provide specific, actionable steps.', 'Meeting: ' + meeting.title);
-    }; })(a, m);
-    li.appendChild(askBtn);
     list.appendChild(li);
   });
   var pa = document.getElementById('promptsArea');
@@ -776,7 +770,8 @@ function showResults(m) {
     m.prompts.forEach(function(p, i) {
       pl.innerHTML += '<div class="prompt-card"><div class="prompt-action">' + escHtml(p.action) + '</div>'
         + '<div class="prompt-text" id="pt-' + i + '">' + escHtml(p.prompt) + '</div>'
-        + '<button class="btn-copy" onclick="copyPrompt(this,' + i + ')">Copy</button></div>';
+        + '<button class="btn-copy" onclick="copyPrompt(this,' + i + ')">Copy</button>'
+        + '<button class="btn-ask" style="position:absolute;top:10px;right:70px" onclick="sendToClaudeChat(document.getElementById(\'pt-' + i + '\').textContent,\'Prompt: ' + escHtml(p.action).replace(/'/g,"\\'") + '\')">Ask Claude &#10024;</button></div>';
     });
     pa.style.display = '';
   } else { pa.style.display = 'none'; }
@@ -1021,9 +1016,15 @@ function wsTaskExists(text, meetingId) {
   return allTasks.some(function(t) { return t.text === text && t.meetingId === meetingId; });
 }
 
-async function addToWorkspace(text, source, meetingId, btn) {
+async function addToWorkspace(text, source, meetingId, btn, prompts) {
+  // Find the matching AI prompt for this action item
+  var aiPrompt = null;
+  if (prompts && prompts.length) {
+    var match = prompts.find(function(p) { return p.action === text; });
+    if (match) aiPrompt = match.prompt;
+  }
   var res = await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ text:text, source:source, meetingId:meetingId, priority:'medium' }) });
+    body: JSON.stringify({ text:text, source:source, meetingId:meetingId, priority:'medium', aiPrompt:aiPrompt }) });
   var task = await res.json();
   allTasks.push(task);
   if (btn) { btn.textContent = '\u2713 In Workspace'; btn.classList.add('added'); btn.onclick = null; }
@@ -1193,8 +1194,7 @@ function renderTaskCard(t) {
     html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
   }
   if (!t.completed) {
-    var askMsg = 'I have a task on my to-do list: ' + t.text.replace(/'/g,"\\'") + '\\nPriority: ' + t.priority + (t.dueDate ? '\\nDue: '+t.dueDate : '') + (t.source && t.source!=='manual' ? '\\nThis came from: '+t.source.replace(/'/g,"\\'") : '') + '\\nPlease help me complete this. Provide specific steps and any relevant templates or drafts I can use immediately.';
-    html += '<button class="btn-ask" onclick="sendToClaudeChat(\'' + askMsg + '\',\'Task: ' + escHtml(t.text).substring(0,30).replace(/'/g,"\\'") + '\')">Ask Claude &#10024;</button>';
+    html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">Ask Claude &#10024;</button>';
   }
   html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
   html += '</div></div>';
@@ -1484,6 +1484,18 @@ function renderChatMessages(highlightLast) {
   if (!html) html = '<div class="empty">Start a conversation with Claude, or click "Ask Claude" from any task or meeting.</div>';
   el.innerHTML = html;
   el.scrollTop = el.scrollHeight;
+}
+
+function askClaudeWorkspaceTask(id) {
+  var t = allTasks.find(function(x) { return x.id === id; });
+  if (!t) return;
+  var msg;
+  if (t.aiPrompt) {
+    msg = t.aiPrompt;
+  } else {
+    msg = 'I have a task: ' + t.text + '\nPriority: ' + (t.priority || 'medium') + (t.dueDate ? '\nDue: ' + t.dueDate : '') + (t.source && t.source !== 'manual' ? '\nThis came from: ' + t.source : '') + '\nPlease help me complete this with specific actionable steps.';
+  }
+  sendToClaudeChat(msg, 'Task: ' + t.text.substring(0, 40));
 }
 
 function askClaudePastMeeting(id) {
