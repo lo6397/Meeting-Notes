@@ -324,7 +324,7 @@ def api_draft_agenda(mid):
     d = request.json or {}
     api_key = d.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key:
-        return jsonify({'error': 'No API key configured.'}), 400
+        return jsonify({'error': 'No API key. Click the ⚙ gear icon (top right) to enter your Anthropic API key.'}), 400
     tasks = load_workspace()
     linked = [t for t in tasks if t.get('linkedMeetingId') == mid and not t.get('completed')]
     prev = [x for x in meetings if x.get('title') == m['title'] and x['id'] != mid and x.get('status') == 'completed' and x.get('summary')]
@@ -371,7 +371,7 @@ def api_chat():
     messages = d.get('messages', [])
     api_key = d.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key:
-        return jsonify({'error': 'No API key configured.'}), 400
+        return jsonify({'error': 'No API key. Click the ⚙ gear icon (top right) to enter your Anthropic API key.'}), 400
     try:
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
