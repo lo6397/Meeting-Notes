@@ -5,6 +5,7 @@ from datetime import datetime, date
 
 app = Flask(__name__)
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'meetings.json')
+EOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eod_summaries.json')
 
 def load_meetings():
     if os.path.exists(DATA_FILE):
@@ -73,6 +74,47 @@ def api_delete(mid):
     meetings = load_meetings()
     meetings = [m for m in meetings if m['id'] != mid]
     save_meetings(meetings)
+    return jsonify({'ok': True})
+
+def load_eod():
+    if os.path.exists(EOD_FILE):
+        try:
+            with open(EOD_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_eod(summaries):
+    with open(EOD_FILE, 'w') as f:
+        json.dump(summaries, f, indent=2)
+
+@app.route('/api/eod', methods=['GET'])
+def api_eod_list():
+    return jsonify(load_eod())
+
+@app.route('/api/eod', methods=['POST'])
+def api_eod_create():
+    d = request.json
+    entry = {
+        'id': str(uuid.uuid4())[:8],
+        'date': d.get('date', date.today().isoformat()),
+        'prompt': d.get('prompt', ''),
+        'selectedActions': d.get('selectedActions', []),
+        'schedule': d.get('schedule', {}),
+        'meetings': d.get('meetings', []),
+        'createdAt': datetime.now().isoformat()
+    }
+    summaries = load_eod()
+    summaries.append(entry)
+    save_eod(summaries)
+    return jsonify(entry)
+
+@app.route('/api/eod/<eid>', methods=['DELETE'])
+def api_eod_delete(eid):
+    summaries = load_eod()
+    summaries = [s for s in summaries if s['id'] != eid]
+    save_eod(summaries)
     return jsonify({'ok': True})
 
 @app.route('/summarize', methods=['POST'])
@@ -192,14 +234,43 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .modal{background:#fff;border-radius:10px;padding:24px;width:440px;max-width:95vw;box-shadow:0 8px 30px rgba(0,0,0,.15)}
 .modal h2{font-size:1.1rem;margin-bottom:8px}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
-@media(max-width:768px){.main{flex-direction:column}.left-panel{width:100%}}
+/* EOD */
+.eod-btn{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
+.eod-btn:hover{opacity:.9}
+.eod-overlay{display:none;position:fixed;inset:0;background:#f0f2f5;z-index:200;overflow-y:auto}
+.eod-overlay.show{display:block}
+.eod-container{max-width:1100px;margin:0 auto;padding:24px}
+.eod-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.eod-header h2{font-size:1.4rem}
+.eod-main{display:flex;gap:24px}
+.eod-left,.eod-right{flex:1;background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.eod-group{margin-bottom:16px}
+.eod-group h4{color:#1a4fa3;font-size:.9rem;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #eee}
+.eod-item{display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:14px}
+.eod-item input[type=checkbox]{margin-top:3px;width:16px;height:16px}
+.eod-bulk{display:flex;gap:8px;margin-bottom:12px}
+.eod-bulk button{font-size:12px;padding:4px 10px}
+.eod-right label{font-weight:600;font-size:13px;display:block;margin:12px 0 4px}
+.eod-right label:first-child{margin-top:0}
+.eod-right input,.eod-right select,.eod-right textarea{width:100%;padding:8px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit}
+.eod-right textarea{height:80px;resize:vertical}
+.eod-actions{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap}
+.eod-prompt-box{background:#f8f9ff;border:1px solid #d4deff;border-radius:8px;padding:16px;margin-top:20px;white-space:pre-wrap;font-size:13px;line-height:1.5;max-height:400px;overflow-y:auto;font-family:inherit}
+.past-eod{margin-top:24px}
+.past-eod h3{margin-bottom:10px;font-size:1rem}
+.past-eod-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;justify-content:space-between;align-items:center}
+.past-eod-card .info{font-size:14px}.past-eod-card .date{font-size:12px;color:#888}
+@media(max-width:768px){.main{flex-direction:column}.left-panel{width:100%}.eod-main{flex-direction:column}}
 </style>
 </head>
 <body>
 <div class="app">
 <header>
   <h1>Meeting Recorder</h1>
-  <button class="gear-btn" onclick="toggleSettings()" title="Settings">&#9881;</button>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button class="eod-btn" onclick="showEOD()">End of Day Review</button>
+    <button class="gear-btn" onclick="toggleSettings()" title="Settings">&#9881;</button>
+  </div>
 </header>
 
 <div id="settingsPanel" class="card" style="display:none;background:#fff;border-radius:10px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
@@ -256,6 +327,56 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <h2>Past Meetings</h2>
   <div class="search-box"><input type="text" id="searchBox" placeholder="Search by title or date..." oninput="searchPast(this.value)"></div>
   <div id="pastList"><div class="empty">No past meetings yet.</div></div>
+</div>
+</div>
+
+<!-- EOD Overlay -->
+<div class="eod-overlay" id="eodOverlay">
+<div class="eod-container">
+  <div class="eod-header">
+    <h2>End of Day Review</h2>
+    <button class="btn btn-gray" onclick="hideEOD()">Back to Meetings</button>
+  </div>
+  <div class="eod-main">
+    <div class="eod-left">
+      <h3 style="margin-bottom:10px">Today's Action Items</h3>
+      <div class="eod-bulk">
+        <button class="btn btn-sm btn-outline" onclick="eodSelectAll()">Select All</button>
+        <button class="btn btn-sm btn-gray" onclick="eodClearAll()">Clear All</button>
+      </div>
+      <div id="eodActions"><div class="empty">No completed meetings today.</div></div>
+    </div>
+    <div class="eod-right">
+      <h3 style="margin-bottom:10px">Schedule Inputs</h3>
+      <label>What time do you start tomorrow?</label>
+      <input type="time" id="eodStartTime" value="08:00">
+      <label>How many hours are you available?</label>
+      <input type="number" id="eodHours" value="8" min="1" max="16" step="0.5">
+      <label>Any existing commitments tomorrow?</label>
+      <textarea id="eodCommitments" placeholder="e.g. 10am dentist, 2pm board meeting..."></textarea>
+      <label>Priorities for tomorrow?</label>
+      <select id="eodPriority">
+        <option value="Mixed">Mixed</option>
+        <option value="Catch up">Catch up</option>
+        <option value="Strategic">Strategic</option>
+      </select>
+    </div>
+  </div>
+  <div class="eod-actions" style="margin-top:20px">
+    <button class="eod-btn" onclick="generateMasterPrompt()">Generate Master Prompt</button>
+  </div>
+  <div id="eodPromptArea" style="display:none">
+    <div class="eod-prompt-box" id="eodPromptText"></div>
+    <div class="eod-actions">
+      <button class="btn btn-blue" onclick="copyEODPrompt()">Copy Prompt</button>
+      <button class="btn btn-start" onclick="window.open('https://claude.ai','_blank')">Open Claude</button>
+      <button class="btn btn-purple" onclick="downloadEODPrompt()">Download as .txt</button>
+    </div>
+  </div>
+  <div class="past-eod" id="pastEODSection">
+    <h3>Past EOD Summaries</h3>
+    <div id="pastEODList"><div class="empty">No past summaries.</div></div>
+  </div>
 </div>
 </div>
 
@@ -664,6 +785,190 @@ async function deleteMeeting(id) {
   allMeetings = allMeetings.filter(function(m){return m.id !== id;});
   if (activeMeetingId === id) clearRight();
   renderToday(); renderPast();
+}
+
+// --- End of Day ---
+var eodPromptGenerated = '';
+
+function showEOD() {
+  document.getElementById('eodOverlay').classList.add('show');
+  document.getElementById('eodPromptArea').style.display = 'none';
+  eodPromptGenerated = '';
+  renderEODActions();
+  loadPastEOD();
+}
+function hideEOD() {
+  document.getElementById('eodOverlay').classList.remove('show');
+}
+
+function renderEODActions() {
+  var todayStr = today();
+  var completed = allMeetings.filter(function(m) { return m.scheduledDate === todayStr && m.status === 'completed' && m.actions && m.actions.length; });
+  var el = document.getElementById('eodActions');
+  if (!completed.length) { el.innerHTML = '<div class="empty">No completed meetings with action items today.</div>'; return; }
+  var html = '';
+  completed.forEach(function(m) {
+    html += '<div class="eod-group"><h4>' + escHtml(m.title) + ' (' + formatTime(m.scheduledTime) + ')</h4>';
+    m.actions.forEach(function(a, i) {
+      html += '<div class="eod-item"><input type="checkbox" checked data-meeting="' + escHtml(m.id) + '" data-action="' + i + '" class="eod-cb"><span>' + escHtml(a) + '</span></div>';
+    });
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function eodSelectAll() { document.querySelectorAll('.eod-cb').forEach(function(cb) { cb.checked = true; }); }
+function eodClearAll() { document.querySelectorAll('.eod-cb').forEach(function(cb) { cb.checked = false; }); }
+
+function getSelectedActions() {
+  var selected = [];
+  document.querySelectorAll('.eod-cb:checked').forEach(function(cb) {
+    var mid = cb.getAttribute('data-meeting');
+    var aidx = parseInt(cb.getAttribute('data-action'));
+    var m = allMeetings.find(function(x) { return x.id === mid; });
+    if (m && m.actions[aidx]) {
+      selected.push({ meeting: m.title, action: m.actions[aidx] });
+    }
+  });
+  return selected;
+}
+
+function getTodayMeetingSummaries() {
+  var todayStr = today();
+  return allMeetings.filter(function(m) { return m.scheduledDate === todayStr && m.status === 'completed'; })
+    .map(function(m) { return { title: m.title, summary: m.summary, time: m.scheduledTime }; });
+}
+
+function generateMasterPrompt() {
+  var selected = getSelectedActions();
+  if (!selected.length) { alert('Please select at least one action item.'); return; }
+
+  var startTime = document.getElementById('eodStartTime').value || '08:00';
+  var hours = document.getElementById('eodHours').value || '8';
+  var commitments = document.getElementById('eodCommitments').value.trim();
+  var priority = document.getElementById('eodPriority').value;
+  var meetings = getTodayMeetingSummaries();
+
+  var tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  var tomorrowStr = tomorrow.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+
+  var prompt = '';
+  prompt += '=== CONTEXT ===\n\n';
+  prompt += 'You are an AI assistant helping the COO of Vellum Health, a mobile IV services company serving skilled nursing facilities. The COO manages clinical operations, scheduling, HR, finance, and client relationships. Always consider HIPAA compliance. Be direct and actionable.\n\n';
+
+  prompt += '=== TODAY\'S ACCOMPLISHMENTS ===\n\n';
+  if (meetings.length) {
+    meetings.forEach(function(m) {
+      prompt += '* ' + m.title + ' (' + formatTime(m.time) + ')\n';
+      if (m.summary) prompt += '  ' + m.summary.substring(0, 200) + '\n';
+      prompt += '\n';
+    });
+  } else {
+    prompt += 'No meetings completed today.\n\n';
+  }
+
+  prompt += '=== SELECTED ACTION ITEMS ===\n\n';
+  var grouped = {};
+  selected.forEach(function(s) {
+    if (!grouped[s.meeting]) grouped[s.meeting] = [];
+    grouped[s.meeting].push(s.action);
+  });
+  var num = 1;
+  Object.keys(grouped).forEach(function(mtg) {
+    prompt += 'From "' + mtg + '":\n';
+    grouped[mtg].forEach(function(a) {
+      prompt += '  ' + num + '. ' + a + '\n';
+      num++;
+    });
+    prompt += '\n';
+  });
+
+  prompt += '=== INSTRUCTIONS ===\n\n';
+  prompt += 'Please do the following:\n\n';
+  prompt += '1. For each action item above, provide a specific solution or draft the deliverable needed (email, document, workflow, etc.)\n\n';
+  prompt += '2. Create an optimized schedule for ' + tomorrowStr + ' starting at ' + formatTime(startTime) + ' with ' + hours + ' hours available';
+  if (commitments) prompt += ', accounting for: ' + commitments;
+  prompt += '\n\n';
+  prompt += '3. Group similar tasks together to minimize context switching\n\n';
+  prompt += '4. Flag any items that are urgent or time-sensitive\n\n';
+  prompt += '5. Suggest which items to delegate vs handle personally\n\n';
+  prompt += '6. End with a prioritized top 3 focus areas for tomorrow\n\n';
+  prompt += 'Priority mode: ' + priority + '\n';
+
+  eodPromptGenerated = prompt;
+  document.getElementById('eodPromptText').textContent = prompt;
+  document.getElementById('eodPromptArea').style.display = '';
+
+  // Save to server
+  fetch('/api/eod', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      date: today(),
+      prompt: prompt,
+      selectedActions: selected,
+      schedule: { startTime: startTime, hours: hours, commitments: commitments, priority: priority },
+      meetings: meetings.map(function(m) { return m.title; })
+    })
+  }).then(function() { loadPastEOD(); });
+}
+
+function copyEODPrompt() {
+  navigator.clipboard.writeText(eodPromptGenerated).then(function() {
+    var btns = document.querySelectorAll('.eod-actions .btn-blue');
+    if (btns.length > 1) { var b = btns[1]; b.textContent = 'Copied!'; setTimeout(function(){ b.textContent = 'Copy Prompt'; }, 2000); }
+  });
+}
+
+function downloadEODPrompt() {
+  var blob = new Blob([eodPromptGenerated], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'EOD-Review-' + today() + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function loadPastEOD() {
+  try {
+    var res = await fetch('/api/eod');
+    var data = await res.json();
+    var el = document.getElementById('pastEODList');
+    if (!data.length) { el.innerHTML = '<div class="empty">No past summaries.</div>'; return; }
+    data.sort(function(a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    var html = '';
+    data.forEach(function(e) {
+      html += '<div class="past-eod-card">';
+      html += '<div class="info"><strong>EOD Review</strong> <span class="date">' + formatDate(e.date) + '</span>';
+      html += ' &mdash; ' + (e.selectedActions || []).length + ' action items, ' + (e.meetings || []).length + ' meetings</div>';
+      html += '<div style="display:flex;gap:6px">';
+      html += '<button class="btn btn-sm btn-purple" onclick="downloadPastEOD(\'' + e.id + '\')">Download</button>';
+      html += '<button class="btn-icon" onclick="deletePastEOD(\'' + e.id + '\')" title="Delete">&#128465;</button>';
+      html += '</div></div>';
+    });
+    el.innerHTML = html;
+    window._eodData = data;
+  } catch(err) {}
+}
+
+function downloadPastEOD(id) {
+  var entry = (window._eodData || []).find(function(e) { return e.id === id; });
+  if (!entry || !entry.prompt) return;
+  var blob = new Blob([entry.prompt], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'EOD-Review-' + entry.date + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function deletePastEOD(id) {
+  if (!confirm('Delete this EOD summary?')) return;
+  await fetch('/api/eod/' + id, { method: 'DELETE' });
+  loadPastEOD();
 }
 
 // --- Init ---
