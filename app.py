@@ -185,6 +185,9 @@ def api_ws_create():
         'aiPrompt': d.get('aiPrompt'),
         'department': d.get('department', 'General'),
         'taskNotes': d.get('taskNotes', []),
+        'zone': d.get('zone', 'triage'),
+        'waitingFor': d.get('waitingFor'),
+        'waitingSince': d.get('waitingSince'),
         'completed': False,
         'completedAt': None,
         'createdAt': datetime.now().isoformat()
@@ -200,7 +203,7 @@ def api_ws_update(tid):
     for t in tasks:
         if t['id'] == tid:
             d = request.json
-            for k in ['text','priority','dueDate','completed','completedAt','linkedMeetingId','linkedMeetingTitle','linkedMeetingDate','department','taskNotes']:
+            for k in ['text','priority','dueDate','completed','completedAt','linkedMeetingId','linkedMeetingTitle','linkedMeetingDate','department','taskNotes','zone','waitingFor','waitingSince']:
                 if k in d:
                     t[k] = d[k]
             save_workspace(tasks)
@@ -213,6 +216,36 @@ def api_ws_delete(tid):
     tasks = [t for t in tasks if t['id'] != tid]
     save_workspace(tasks)
     return jsonify({'ok': True})
+
+@app.route('/api/workspace/suggest-zones', methods=['POST'])
+def api_suggest_zones():
+    d = request.json
+    tasks = d.get('tasks', [])
+    api_key = d.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No API key.'}), 400
+    task_list = '\n'.join([str(i+1)+'. '+t.get('text','')+ ' ['+t.get('priority','medium')+']'+((' due:'+t['dueDate']) if t.get('dueDate') else '') for i,t in enumerate(tasks)])
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=1024,
+            messages=[{'role':'user','content':f"""Sort these tasks into zones. Return ONLY valid JSON array where each element is an object with "index" (0-based) and "zone" (one of: focus, waiting, upcoming, backlog).
+
+Rules:
+- "focus": urgent/high priority items the user should personally do today (max 5)
+- "waiting": items that depend on someone else
+- "upcoming": items tied to a future date or meeting
+- "backlog": everything else
+
+Tasks:
+{task_list}"""}]
+        )
+        text = resp.content[0].text.strip()
+        if text.startswith('```'): text = text.split('\n',1)[1] if '\n' in text else text[3:]
+        if text.endswith('```'): text = text[:-3]
+        return jsonify(json.loads(text.strip()))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/tasks/<tid>/notes', methods=['POST'])
 def api_task_add_note(tid):
@@ -511,6 +544,57 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 /* Ask Claude button */
 .btn-ask{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-ask:hover{opacity:.85}
+/* Zones */
+.zone-section{border-radius:10px;padding:16px;margin-bottom:16px}
+.zone-section h3{font-size:.95rem;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.zone-section h3 .zone-count{font-size:12px;color:#888;font-weight:400}
+.zone-focus{background:#fff5f5;border:1px solid #feb2b2}
+.zone-focus h3{color:#c53030}
+.zone-waiting{background:#fffff0;border:1px solid #fefcbf}
+.zone-waiting h3{color:#975a16}
+.zone-upcoming{background:#ebf8ff;border:1px solid #bee3f8}
+.zone-upcoming h3{color:#2b6cb0}
+.zone-backlog{background:#f7fafc;border:1px solid #e2e8f0}
+.zone-backlog h3{color:#718096}
+.zone-triage{background:#fff8f0;border:2px solid #f6ad55;border-radius:10px;padding:16px;margin-bottom:16px}
+.zone-triage h3{color:#c05621}
+.zone-warning{font-size:12px;color:#e53e3e;margin-bottom:8px}
+.zone-task{display:flex;align-items:flex-start;gap:8px;background:#fff;border-radius:6px;padding:10px;margin-bottom:6px;font-size:13px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.zone-task.done{opacity:.4}
+.zone-task input[type=checkbox]{width:16px;height:16px;flex-shrink:0;margin-top:2px}
+.zone-task-body{flex:1;min-width:0}
+.zone-task-text{font-size:14px;margin-bottom:3px}
+.zone-task-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.zone-task-actions{display:flex;gap:4px;flex-shrink:0;align-items:center;flex-wrap:wrap}
+.zone-move-btns{display:flex;gap:3px}
+.zone-move{width:24px;height:24px;border:none;border-radius:4px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.zone-move:hover{opacity:.8}
+.zm-focus{background:#fed7d7;color:#c53030}
+.zm-waiting{background:#fefcbf;color:#975a16}
+.zm-upcoming{background:#bee3f8;color:#2b6cb0}
+.zm-backlog{background:#e2e8f0;color:#718096}
+.waiting-info{font-size:12px;color:#975a16;display:flex;align-items:center;gap:4px}
+.waiting-input{font-size:12px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;width:120px}
+/* Quick Capture */
+.quick-capture-fab{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);z-index:90;display:flex;align-items:center;justify-content:center}
+.quick-capture-fab:hover{transform:scale(1.1);box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.quick-capture-popup{display:none;position:fixed;bottom:90px;right:24px;width:340px;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.2);z-index:91;padding:16px}
+.quick-capture-popup.show{display:block}
+.quick-capture-popup h4{margin-bottom:8px;font-size:.95rem}
+.quick-capture-popup textarea{width:100%;min-height:60px;max-height:100px;margin-bottom:8px;padding:8px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit;resize:none;box-sizing:border-box}
+.qc-zone-btns{display:flex;gap:6px;flex-wrap:wrap}
+.qc-zone-btns button{flex:1;padding:8px;font-size:12px;font-weight:600;border:none;border-radius:6px;cursor:pointer;min-width:60px}
+.qc-focus{background:#fed7d7;color:#c53030}.qc-waiting{background:#fefcbf;color:#975a16}
+.qc-upcoming{background:#bee3f8;color:#2b6cb0}.qc-backlog{background:#e2e8f0;color:#718096}
+.qc-triage{background:#fff;border:1px solid #ddd;color:#666}
+/* Wrap-up Modal */
+.wrapup-item{background:#f7fafc;border-radius:8px;padding:12px;margin-bottom:8px}
+.wrapup-item .wrapup-text{font-size:14px;margin-bottom:8px}
+.wrapup-zone-btns{display:flex;gap:6px;flex-wrap:wrap}
+.wrapup-zone-btns button{padding:6px 12px;font-size:12px;font-weight:600;border:none;border-radius:5px;cursor:pointer}
+.wrapup-triage-all{margin-bottom:16px}
+/* Triage badge */
+.triage-badge{background:#f6ad55;color:#fff;font-size:10px;font-weight:700;border-radius:8px;padding:1px 6px;margin-left:4px}
 /* Action Items Bulk */
 .ai-header{display:flex;align-items:center;gap:10px;margin:14px 0 8px;flex-wrap:wrap}
 .ai-header h3{margin:0;color:#1a4fa3;font-size:.95rem}
@@ -631,7 +715,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 
 <div class="app-tabs">
   <button class="app-tab active" onclick="switchAppTab('meetings')">&#128197; Today</button>
-  <button class="app-tab" onclick="switchAppTab('workspace')">&#9745; Workspace</button>
+  <button class="app-tab" onclick="switchAppTab('workspace')">&#9745; Workspace <span id="triageBadge" class="triage-badge" style="display:none"></span></button>
   <button class="app-tab" onclick="switchAppTab('past')">&#128214; Past</button>
   <button class="app-tab" onclick="switchAppTab('chat')" id="chatTabBtn">&#128172; Chat</button>
 </div>
@@ -673,6 +757,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
           <div id="promptsList"></div>
         </div>
         <div class="result-actions">
+          <button class="eod-btn" onclick="showWrapup()">Wrap Up Meeting</button>
           <button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>
           <button class="btn btn-start" onclick="clearRight()">New Meeting</button>
         </div>
@@ -739,6 +824,35 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <button class="btn btn-blue" onclick="sendChatMsg()">Send</button>
   </div>
 </div>
+</div>
+
+<!-- Wrap-up Modal -->
+<div class="modal-overlay" id="wrapupModal">
+<div class="modal" style="width:560px">
+  <h2>Wrap Up Meeting</h2>
+  <p style="font-size:13px;color:#888;margin-bottom:12px">Where does each action item go?</p>
+  <div class="wrapup-triage-all">
+    <button class="btn btn-gray" onclick="wrapupTriageAll()" style="width:100%;padding:10px;font-size:14px">&#9208;&#65039; Triage Later — save all and sort when ready</button>
+  </div>
+  <div id="wrapupItems"></div>
+  <div class="modal-actions">
+    <button class="btn btn-gray" onclick="hideWrapup()">Close</button>
+  </div>
+</div>
+</div>
+
+<!-- Quick Capture FAB -->
+<button class="quick-capture-fab" onclick="toggleQuickCapture()" title="Quick capture">+</button>
+<div class="quick-capture-popup" id="qcPopup">
+  <h4>Quick Capture</h4>
+  <textarea id="qcText" placeholder="What's on your mind?"></textarea>
+  <div class="qc-zone-btns">
+    <button class="qc-focus" onclick="quickCapture('focus')">&#128308; Focus</button>
+    <button class="qc-waiting" onclick="quickCapture('waiting')">&#128236; Waiting</button>
+    <button class="qc-upcoming" onclick="quickCapture('upcoming')">&#128197; Upcoming</button>
+    <button class="qc-backlog" onclick="quickCapture('backlog')">&#128450; Backlog</button>
+    <button class="qc-triage" onclick="quickCapture('triage')">&#9208; Later</button>
+  </div>
 </div>
 
 <!-- Agenda Modal -->
@@ -1446,116 +1560,191 @@ function filterTasks(tasks) {
   }
 }
 
-function renderWorkspace() {
-  var todayStr = today();
-  var weekEnd = getWeekEnd();
-  var incomplete = allTasks.filter(function(t){return !t.completed;});
-  var dueToday = allTasks.filter(function(t){return !t.completed && t.dueDate===todayStr;});
-  var overdue = allTasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate<todayStr;});
-  var highP = allTasks.filter(function(t){return !t.completed && t.priority==='high';});
-  var weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-  var completedWeek = allTasks.filter(function(t){return t.completed && t.completedAt && t.completedAt>=weekStart.toISOString();});
-  document.getElementById('wsStats').innerHTML =
-    '<div class="ws-stat"><div class="num">'+incomplete.length+'</div><div class="label">Open Tasks</div></div>'
-    +'<div class="ws-stat"><div class="num">'+dueToday.length+'</div><div class="label">Due Today</div></div>'
-    +'<div class="ws-stat"><div class="num">'+(overdue.length||0)+'</div><div class="label">Overdue</div></div>'
-    +'<div class="ws-stat"><div class="num">'+highP.length+'</div><div class="label">High Priority</div></div>'
-    +'<div class="ws-stat"><div class="num">'+completedWeek.length+'</div><div class="label">Done This Week</div></div>';
+function getZone(t) { return t.zone || (t.completed ? 'completed' : 'triage'); }
 
-  var filtered = filterTasks(allTasks);
-  var open = filtered.filter(function(t){return !t.completed;});
-  var done = filtered.filter(function(t){return t.completed;});
-  // Sort
-  var po = {high:0,medium:1,low:2};
-  switch(wsSort) {
-    case 'priority': open.sort(function(a,b){return (po[a.priority]||1)-(po[b.priority]||1);}); break;
-    case 'due': open.sort(function(a,b){return (a.dueDate||'9999')< (b.dueDate||'9999')?-1:1;}); break;
-    case 'added': open.sort(function(a,b){return (b.createdAt||'').localeCompare(a.createdAt||'');}); break;
-    case 'alpha': open.sort(function(a,b){return (a.text||'').toLowerCase().localeCompare((b.text||'').toLowerCase());}); break;
-    case 'department': open.sort(function(a,b){return (a.department||'General').localeCompare(b.department||'General');}); break;
-  }
-
-  var el = document.getElementById('wsList');
-  if (!open.length && wsFilter !== 'completed') { el.innerHTML = '<div class="empty">No tasks match this filter.</div>'; }
-  else if (wsSort === 'department') {
-    var groups = {};
-    open.forEach(function(t) { var d = t.department || 'General'; if (!groups[d]) groups[d] = []; groups[d].push(t); });
-    var gh = '';
-    Object.keys(groups).sort().forEach(function(d) {
-      gh += '<div class="ws-dept-header">' + d + ' (' + groups[d].length + ')</div>';
-      gh += groups[d].map(renderTaskCard).join('');
-    });
-    el.innerHTML = gh;
-  }
-  else { el.innerHTML = open.map(renderTaskCard).join(''); }
-
-  var toggle = document.getElementById('wsCompletedToggle');
-  var cList = document.getElementById('wsCompletedList');
-  if (done.length) {
-    toggle.style.display = '';
-    toggle.textContent = (showCompleted ? '\u25BC' : '\u25B6') + ' Completed (' + done.length + ')';
-    cList.style.display = showCompleted ? '' : 'none';
-    cList.innerHTML = done.map(renderTaskCard).join('');
-  } else { toggle.style.display = 'none'; cList.style.display = 'none'; }
+function daysSince(iso) {
+  if (!iso) return 0;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }
 
-function renderTaskCard(t) {
+function updateTriageBadge() {
+  var triageCount = allTasks.filter(function(t){return getZone(t)==='triage' && !t.completed;}).length;
+  var badge = document.getElementById('triageBadge');
+  if (triageCount > 0) { badge.style.display = ''; badge.textContent = triageCount; }
+  else { badge.style.display = 'none'; }
+}
+
+function renderWorkspace() {
   var todayStr = today();
-  var cls = 'ws-task' + (t.completed ? ' done' : '');
+  var weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  var completedWeek = allTasks.filter(function(t){return t.completed && t.completedAt && t.completedAt>=weekStart.toISOString();});
+  var focus = allTasks.filter(function(t){return getZone(t)==='focus' && !t.completed;});
+  var waiting = allTasks.filter(function(t){return getZone(t)==='waiting' && !t.completed;});
+  var upcoming = allTasks.filter(function(t){return getZone(t)==='upcoming' && !t.completed;});
+  var backlog = allTasks.filter(function(t){return getZone(t)==='backlog' && !t.completed;});
+  var triage = allTasks.filter(function(t){return getZone(t)==='triage' && !t.completed;});
+  var done = allTasks.filter(function(t){return t.completed;});
+
+  // Stats
+  document.getElementById('wsStats').innerHTML =
+    '<div class="ws-stat"><div class="num">'+focus.length+'</div><div class="label">Today\'s Focus</div></div>'
+    +'<div class="ws-stat"><div class="num">'+waiting.length+'</div><div class="label">Waiting On</div></div>'
+    +'<div class="ws-stat"><div class="num">'+upcoming.length+'</div><div class="label">Upcoming</div></div>'
+    +'<div class="ws-stat"><div class="num">'+backlog.length+'</div><div class="label">Backlog</div></div>'
+    +'<div class="ws-stat"><div class="num">'+completedWeek.length+'</div><div class="label">Done This Week</div></div>';
+
+  updateTriageBadge();
+
+  var el = document.getElementById('wsList');
+  var html = '';
+
+  // Triage section
+  if (triage.length) {
+    html += '<div class="zone-triage"><h3>&#9888;&#65039; Needs Triage <span class="zone-count">(' + triage.length + ')</span>';
+    html += ' <button class="btn btn-sm btn-blue" onclick="suggestZones()" style="margin-left:8px">Ask Claude to sort</button></h3>';
+    html += triage.map(function(t){return renderZoneTask(t, true);}).join('');
+    html += '</div>';
+  }
+
+  // Focus
+  html += '<div class="zone-section zone-focus"><h3>&#128308; Today\'s Focus <span class="zone-count">(' + focus.length + '/5)</span></h3>';
+  if (focus.length > 5) html += '<div class="zone-warning">You have too many focus items — consider moving some to backlog</div>';
+  if (focus.length) html += focus.map(function(t){return renderZoneTask(t);}).join('');
+  else html += '<div class="empty" style="padding:8px;font-size:13px">No focus tasks. Add items from triage or meetings.</div>';
+  html += '</div>';
+
+  // Waiting
+  html += '<div class="zone-section zone-waiting"><h3>&#128236; Waiting On <span class="zone-count">(' + waiting.length + ')</span></h3>';
+  if (waiting.length) html += waiting.map(function(t){return renderZoneTask(t);}).join('');
+  else html += '<div class="empty" style="padding:8px;font-size:13px">Nothing waiting.</div>';
+  html += '</div>';
+
+  // Upcoming
+  upcoming.sort(function(a,b){return (a.dueDate||'9999').localeCompare(b.dueDate||'9999');});
+  html += '<div class="zone-section zone-upcoming"><h3>&#128197; Upcoming <span class="zone-count">(' + upcoming.length + ')</span></h3>';
+  if (upcoming.length) html += upcoming.map(function(t){return renderZoneTask(t);}).join('');
+  else html += '<div class="empty" style="padding:8px;font-size:13px">Nothing upcoming.</div>';
+  html += '</div>';
+
+  // Backlog (collapsed)
+  html += '<div class="zone-section zone-backlog"><h3 style="cursor:pointer" onclick="document.getElementById(\'backlogContent\').style.display=document.getElementById(\'backlogContent\').style.display===\'none\'?\'\':\'none\'">&#128450; Backlog <span class="zone-count">(' + backlog.length + ')</span> &#9660;</h3>';
+  html += '<div id="backlogContent" style="display:none">';
+  if (backlog.length) {
+    var byDept = {};
+    backlog.forEach(function(t){var d=t.department||'General';if(!byDept[d])byDept[d]=[];byDept[d].push(t);});
+    Object.keys(byDept).sort().forEach(function(d) {
+      html += '<div class="ws-dept-header">' + d + '</div>';
+      html += byDept[d].map(function(t){return renderZoneTask(t);}).join('');
+    });
+  } else html += '<div class="empty" style="padding:8px;font-size:13px">Backlog empty.</div>';
+  html += '</div></div>';
+
+  // Completed
+  if (done.length) {
+    html += '<button class="ws-completed-toggle" onclick="document.getElementById(\'doneContent\').style.display=document.getElementById(\'doneContent\').style.display===\'none\'?\'\':\'none\'">' + (showCompleted?'\u25BC':'\u25B6') + ' Completed (' + done.length + ')</button>';
+    html += '<div id="doneContent" style="display:none">';
+    html += done.map(function(t){return renderZoneTask(t);}).join('');
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+  // Hide filters/sort bars — zones replace them
+  document.getElementById('wsFilters').style.display = 'none';
+  var sortBar = document.querySelector('.ws-sort-bar');
+  if (sortBar) sortBar.style.display = 'none';
+}
+
+function renderZoneTask(t, showTriageButtons) {
+  var todayStr = today();
+  var cls = 'zone-task' + (t.completed ? ' done' : '');
   var html = '<div class="' + cls + '">';
   html += '<input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onchange="toggleWsTask(\'' + t.id + '\')">';
-  html += '<div class="ws-task-body">';
-  html += '<div class="ws-task-text">' + escHtml(t.text) + '</div>';
-  html += '<div class="ws-task-meta">';
-  html += '<span class="ws-tag ws-tag-source">From: ' + escHtml(t.source) + '</span>';
-  // Department badge
+  html += '<div class="zone-task-body">';
+  html += '<div class="zone-task-text">' + escHtml(t.text) + '</div>';
+  html += '<div class="zone-task-meta">';
+  html += '<span class="ws-tag ws-tag-source">' + escHtml(t.source||'manual') + '</span>';
   var dept = t.department || 'General';
-  var deptKey = dept.split(' ')[0]; // "Business Development" -> "Business"
-  html += '<span class="ws-tag ws-tag-dept-' + deptKey + '">' + dept + '</span>';
-  // Clickable priority badge
-  var pLabel = {high:'High',medium:'Medium',low:'Low'}[t.priority||'medium'] || 'Medium';
-  if (!t.completed) {
-    html += '<span class="ws-tag ws-tag-' + (t.priority||'medium') + '" onclick="cyclePriority(\'' + t.id + '\')" title="Click to change priority">' + pLabel + '</span>';
-  } else {
-    html += '<span class="ws-tag ws-tag-' + (t.priority||'medium') + '">' + pLabel + '</span>';
-  }
-  // Due date with overdue/today highlighting
+  html += '<span class="ws-tag ws-tag-dept-' + dept.split(' ')[0] + '">' + dept + '</span>';
+  var pLabel = {high:'High',medium:'Medium',low:'Low'}[t.priority||'medium']||'Medium';
+  html += '<span class="ws-tag ws-tag-' + (t.priority||'medium') + '" onclick="cyclePriority(\'' + t.id + '\')" title="Click to change" style="cursor:pointer">' + pLabel + '</span>';
   if (t.dueDate) {
     var dueCls = 'ws-tag ws-tag-date';
     if (!t.completed && t.dueDate < todayStr) dueCls = 'ws-tag ws-tag-overdue';
     else if (!t.completed && t.dueDate === todayStr) dueCls = 'ws-tag ws-tag-due-today';
     html += '<span class="' + dueCls + '">Due: ' + t.dueDate + '</span>';
   }
-  if (t.linkedMeetingId && t.linkedMeetingTitle) {
-    html += '<span class="ws-tag ws-tag-linked" onclick="unlinkTask(\'' + t.id + '\')" title="Click to unlink">&#128197; ' + escHtml(t.linkedMeetingTitle) + (t.linkedMeetingDate ? ' - ' + t.linkedMeetingDate : '') + ' &times;</span>';
+  if (getZone(t) === 'waiting' && t.waitingFor) {
+    html += '<span class="waiting-info">Waiting for: ' + escHtml(t.waitingFor) + ' (' + daysSince(t.waitingSince) + 'd)</span>';
   }
-  html += '<span style="font-size:11px;color:#aaa">' + (t.createdAt||'').split('T')[0] + '</span>';
+  if (t.linkedMeetingId && t.linkedMeetingTitle) {
+    html += '<span class="ws-tag ws-tag-linked" onclick="unlinkTask(\'' + t.id + '\')" title="Unlink">&#128197; ' + escHtml(t.linkedMeetingTitle) + ' &times;</span>';
+  }
   html += '</div>';
-  // Latest note preview
+  // Notes
   var notes = t.taskNotes || [];
   if (notes.length) {
-    var latest = notes[notes.length - 1];
-    var preview = (latest.text || '').substring(0, 60) + ((latest.text || '').length > 60 ? '...' : '');
-    html += '<div class="ws-latest-note">&#128172; Latest: ' + escHtml(preview) + '</div>';
+    html += '<div class="ws-latest-note">&#128172; ' + escHtml((notes[notes.length-1].text||'').substring(0,50)) + '</div>';
   }
-  // Notes toggle
-  html += '<button class="ws-notes-toggle" onclick="event.stopPropagation();toggleTaskNotes(\'' + t.id + '\',this)">&#128221; Notes (' + notes.length + ')</button>';
-  html += '<div class="ws-notes-panel" id="notes-' + t.id + '" style="display:none"></div>';
   html += '</div>';
-  html += '<div class="ws-task-actions">';
+  html += '<div class="zone-task-actions">';
   if (!t.completed) {
-    html += '<select class="ws-dept-select" onchange="updateWsDept(\'' + t.id + '\',this.value)" title="Department">';
-    ['Clinical','Operations','HR','Finance','Business Development','General'].forEach(function(d) {
-      html += '<option value="'+d+'"'+(dept===d?' selected':'')+'>'+d+'</option>';
-    });
-    html += '</select>';
-    html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
-    html += '<button class="btn btn-sm btn-outline" onclick="showLinkDropdown(\'' + t.id + '\',this)" title="Link to meeting">&#128197;</button>';
-    html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">Ask Claude &#10024;</button>';
+    // Zone move buttons
+    if (showTriageButtons || true) {
+      html += '<div class="zone-move-btns">';
+      if (getZone(t) !== 'focus') html += '<button class="zone-move zm-focus" onclick="moveToZone(\'' + t.id + '\',\'focus\')" title="Focus">&#128308;</button>';
+      if (getZone(t) !== 'waiting') html += '<button class="zone-move zm-waiting" onclick="promptWaiting(\'' + t.id + '\')" title="Waiting">&#128236;</button>';
+      if (getZone(t) !== 'upcoming') html += '<button class="zone-move zm-upcoming" onclick="moveToZone(\'' + t.id + '\',\'upcoming\')" title="Upcoming">&#128197;</button>';
+      if (getZone(t) !== 'backlog') html += '<button class="zone-move zm-backlog" onclick="moveToZone(\'' + t.id + '\',\'backlog\')" title="Backlog">&#128450;</button>';
+      html += '</div>';
+    }
+    html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Due date" style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;width:auto">';
+    html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">&#10024;</button>';
   }
-  html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
+  html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete" style="font-size:14px">&#128465;</button>';
   html += '</div></div>';
   return html;
+}
+
+async function moveToZone(taskId, zone) {
+  var update = { zone: zone };
+  if (zone !== 'waiting') { update.waitingFor = null; update.waitingSince = null; }
+  await fetch('/api/workspace/'+taskId, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(update) });
+  var t = allTasks.find(function(x){return x.id===taskId;});
+  if (t) { t.zone = zone; if (zone !== 'waiting') { t.waitingFor = null; t.waitingSince = null; } }
+  renderWorkspace();
+}
+
+function promptWaiting(taskId) {
+  var who = prompt('Who or what are you waiting for?');
+  if (!who) return;
+  fetch('/api/workspace/'+taskId, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ zone:'waiting', waitingFor:who, waitingSince:new Date().toISOString() }) });
+  var t = allTasks.find(function(x){return x.id===taskId;});
+  if (t) { t.zone = 'waiting'; t.waitingFor = who; t.waitingSince = new Date().toISOString(); }
+  renderWorkspace();
+}
+
+async function suggestZones() {
+  var triage = allTasks.filter(function(t){return getZone(t)==='triage' && !t.completed;});
+  if (!triage.length) return;
+  var el = document.querySelector('.zone-triage h3');
+  var origText = el.innerHTML;
+  el.innerHTML = '&#9888;&#65039; Sorting with Claude...';
+  try {
+    var res = await fetch('/api/workspace/suggest-zones', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ tasks:triage, api_key:localStorage.getItem('anthropic_api_key')||'' })
+    });
+    var suggestions = await res.json();
+    if (suggestions.error) { alert(suggestions.error); el.innerHTML = origText; return; }
+    for (var i = 0; i < suggestions.length; i++) {
+      var s = suggestions[i];
+      var task = triage[s.index];
+      if (task && s.zone) { await moveToZone(task.id, s.zone); }
+    }
+  } catch(e) { alert('Failed: '+e.message); }
+  el.innerHTML = origText;
+  renderWorkspace();
 }
 
 // --- End of Day ---
@@ -1586,17 +1775,29 @@ function renderEODActions() {
     html += '</div>';
   });
   el.innerHTML = html;
-  // Carry-over workspace tasks
-  var carryover = allTasks.filter(function(t){return !t.completed;});
+  // EOD zone summary
+  var focusTasks = allTasks.filter(function(t){return getZone(t)==='focus' && !t.completed;});
+  var focusDone = allTasks.filter(function(t){return getZone(t)==='focus' && t.completed;});
+  var waitingLong = allTasks.filter(function(t){return getZone(t)==='waiting' && !t.completed && daysSince(t.waitingSince) > 2;});
+  var triagePending = allTasks.filter(function(t){return getZone(t)==='triage' && !t.completed;});
+
   var cel = document.getElementById('eodCarryover');
-  if (!carryover.length) { cel.innerHTML = '<div class="empty" style="font-size:13px">No incomplete workspace tasks.</div>'; }
-  else {
-    var ch = '';
-    carryover.forEach(function(t) {
-      ch += '<div class="eod-item"><input type="checkbox" checked class="eod-ws-cb" data-wsid="' + t.id + '"><span>' + escHtml(t.text) + ' <span class="ws-tag ws-tag-source" style="font-size:10px">'+escHtml(t.source)+'</span></span></div>';
-    });
-    cel.innerHTML = ch;
-  }
+  var ch = '';
+  ch += '<div style="margin-bottom:8px;font-size:13px">';
+  ch += '<strong>&#9989; Focus:</strong> ' + focusDone.length + ' done, ' + focusTasks.length + ' remaining<br>';
+  if (waitingLong.length) ch += '<strong style="color:#dc3535">&#128236; Waiting &gt;2 days:</strong> ' + waitingLong.length + ' items<br>';
+  if (triagePending.length) ch += '<strong style="color:#e67e22">&#9888; Needs Triage:</strong> ' + triagePending.length + ' items to sort<br>';
+  ch += '</div>';
+
+  // Show focus tasks for tomorrow planning
+  focusTasks.forEach(function(t) {
+    ch += '<div class="eod-item"><input type="checkbox" checked class="eod-ws-cb" data-wsid="' + t.id + '"><span>' + escHtml(t.text) + ' <span class="ws-tag ws-tag-source" style="font-size:10px">'+escHtml(t.source)+'</span></span></div>';
+  });
+  waitingLong.forEach(function(t) {
+    ch += '<div class="eod-item"><input type="checkbox" class="eod-ws-cb" data-wsid="' + t.id + '"><span>' + escHtml(t.text) + ' <span style="font-size:10px;color:#dc3535">waiting ' + daysSince(t.waitingSince) + 'd on '+escHtml(t.waitingFor||'?')+'</span></span></div>';
+  });
+  if (!focusTasks.length && !waitingLong.length) ch += '<div class="empty" style="font-size:13px">All focus items done!</div>';
+  cel.innerHTML = ch;
 }
 
 function eodSelectAll() { document.querySelectorAll('.eod-cb,.eod-ws-cb').forEach(function(cb) { cb.checked = true; }); }
@@ -2066,6 +2267,102 @@ async function deleteTaskNote(taskId, noteIdx) {
   var t = allTasks.find(function(x){return x.id===taskId;});
   if (t && t.taskNotes) t.taskNotes.splice(noteIdx, 1);
   renderTaskNotes(taskId);
+}
+
+// --- Wrap-up Modal ---
+function showWrapup() {
+  var m = _showResultsMeeting || allMeetings.find(function(x){return x.id===activeMeetingId;});
+  if (!m || !m.actions || !m.actions.length) { alert('No action items to triage.'); return; }
+  var el = document.getElementById('wrapupItems');
+  var html = '';
+  m.actions.forEach(function(a, i) {
+    var inWs = wsTaskExists(a, m.id);
+    if (inWs) {
+      html += '<div class="wrapup-item"><div class="wrapup-text">' + escHtml(a) + ' <span class="action-add-btn added" style="cursor:default">\u2713 In Workspace</span></div></div>';
+    } else {
+      html += '<div class="wrapup-item" id="wrapup-' + i + '"><div class="wrapup-text">' + escHtml(a) + '</div>';
+      html += '<div class="wrapup-zone-btns">';
+      html += '<button class="qc-focus" onclick="wrapupAddItem('+i+',\'focus\')">&#128308; My Focus</button>';
+      html += '<button class="qc-waiting" onclick="wrapupAddWaiting('+i+')">&#128236; Delegate</button>';
+      html += '<button class="qc-upcoming" onclick="wrapupAddItem('+i+',\'upcoming\')">&#128197; Upcoming</button>';
+      html += '<button class="qc-backlog" onclick="wrapupAddItem('+i+',\'backlog\')">&#128450; Backlog</button>';
+      html += '</div></div>';
+    }
+  });
+  el.innerHTML = html;
+  document.getElementById('wrapupModal').classList.add('show');
+  window._wrapupMeeting = m;
+}
+function hideWrapup() { document.getElementById('wrapupModal').classList.remove('show'); }
+
+async function wrapupAddItem(idx, zone) {
+  var m = window._wrapupMeeting;
+  if (!m) return;
+  var a = m.actions[idx];
+  var aiPrompt = null;
+  if (m.prompts) { var match = m.prompts.find(function(p){return p.action===a;}); if (match) aiPrompt = match.prompt; }
+  await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text:a, source:m.title, meetingId:m.id, priority:'medium', zone:zone, aiPrompt:aiPrompt }) });
+  await loadWorkspace();
+  var el = document.getElementById('wrapup-'+idx);
+  if (el) el.innerHTML = '<div class="wrapup-text">' + escHtml(a) + ' <span class="action-add-btn added" style="cursor:default">\u2713 Added to ' + zone + '</span></div>';
+}
+
+async function wrapupAddWaiting(idx) {
+  var who = prompt('Who are you delegating this to?');
+  if (!who) return;
+  var m = window._wrapupMeeting;
+  if (!m) return;
+  var a = m.actions[idx];
+  var aiPrompt = null;
+  if (m.prompts) { var match = m.prompts.find(function(p){return p.action===a;}); if (match) aiPrompt = match.prompt; }
+  await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text:a, source:m.title, meetingId:m.id, priority:'medium', zone:'waiting', waitingFor:who, waitingSince:new Date().toISOString(), aiPrompt:aiPrompt }) });
+  await loadWorkspace();
+  var el = document.getElementById('wrapup-'+idx);
+  if (el) el.innerHTML = '<div class="wrapup-text">' + escHtml(a) + ' <span class="action-add-btn added" style="cursor:default">\u2713 Waiting on ' + escHtml(who) + '</span></div>';
+}
+
+async function wrapupTriageAll() {
+  var m = window._wrapupMeeting;
+  if (!m) return;
+  for (var i = 0; i < m.actions.length; i++) {
+    var a = m.actions[i];
+    if (!wsTaskExists(a, m.id)) {
+      var aiPrompt = null;
+      if (m.prompts) { var match = m.prompts.find(function(p){return p.action===a;}); if (match) aiPrompt = match.prompt; }
+      await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ text:a, source:m.title, meetingId:m.id, priority:'medium', zone:'triage', aiPrompt:aiPrompt }) });
+    }
+  }
+  await loadWorkspace();
+  hideWrapup();
+  updateTriageBadge();
+}
+
+// --- Quick Capture ---
+function toggleQuickCapture() {
+  var popup = document.getElementById('qcPopup');
+  popup.classList.toggle('show');
+  if (popup.classList.contains('show')) document.getElementById('qcText').focus();
+}
+
+async function quickCapture(zone) {
+  var text = document.getElementById('qcText').value.trim();
+  if (!text) return;
+  var data = { text:text, source:'manual', priority:'medium', zone:zone };
+  if (zone === 'waiting') {
+    var who = prompt('Who or what are you waiting for?');
+    if (!who) return;
+    data.waitingFor = who;
+    data.waitingSince = new Date().toISOString();
+  }
+  await fetch('/api/workspace', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
+  await loadWorkspace();
+  document.getElementById('qcText').value = '';
+  document.getElementById('qcPopup').classList.remove('show');
+  updateTriageBadge();
+  if (document.getElementById('tab-workspace').classList.contains('active')) renderWorkspace();
 }
 
 // --- Init ---
