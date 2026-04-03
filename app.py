@@ -4,9 +4,13 @@ import os, json, uuid
 from datetime import datetime, date
 
 app = Flask(__name__)
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'meetings.json')
-EOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eod_summaries.json')
-WORKSPACE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'workspace.json')
+
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DATA_FILE = os.path.join(DATA_DIR, 'meetings.json')
+EOD_FILE = os.path.join(DATA_DIR, 'eod_summaries.json')
+WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.json')
 
 def load_meetings():
     if os.path.exists(DATA_FILE):
@@ -27,6 +31,39 @@ def find_meeting(mid):
         if m['id'] == mid:
             return m, meetings
     return None, meetings
+
+@app.route('/health')
+def health():
+    meetings = load_meetings()
+    tasks = load_workspace()
+    eods = load_eod()
+    last_mod = 0
+    for f in [DATA_FILE, WORKSPACE_FILE, EOD_FILE]:
+        if os.path.exists(f):
+            last_mod = max(last_mod, os.path.getmtime(f))
+    return jsonify({
+        'status': 'ok',
+        'meetings_count': len(meetings),
+        'workspace_tasks': len(tasks),
+        'eod_summaries': len(eods),
+        'data_dir': DATA_DIR,
+        'last_updated': datetime.fromtimestamp(last_mod).isoformat() if last_mod else None
+    })
+
+@app.route('/backup')
+def backup():
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json']:
+            fpath = os.path.join(DATA_DIR, fname)
+            if os.path.exists(fpath):
+                zf.write(fpath, fname)
+    buf.seek(0)
+    from flask import send_file
+    return send_file(buf, mimetype='application/zip',
+                     as_attachment=True,
+                     download_name='meeting-recorder-backup-' + date.today().isoformat() + '.zip')
 
 @app.route('/')
 def index():
