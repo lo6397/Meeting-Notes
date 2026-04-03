@@ -198,7 +198,7 @@ def api_ws_update(tid):
     for t in tasks:
         if t['id'] == tid:
             d = request.json
-            for k in ['text','priority','dueDate','completed','completedAt']:
+            for k in ['text','priority','dueDate','completed','completedAt','linkedMeetingId','linkedMeetingTitle','linkedMeetingDate']:
                 if k in d:
                     t[k] = d[k]
             save_workspace(tasks)
@@ -211,6 +211,74 @@ def api_ws_delete(tid):
     tasks = [t for t in tasks if t['id'] != tid]
     save_workspace(tasks)
     return jsonify({'ok': True})
+
+@app.route('/api/tasks/<tid>/link-meeting', methods=['POST'])
+def api_link_task(tid):
+    tasks = load_workspace()
+    for t in tasks:
+        if t['id'] == tid:
+            d = request.json
+            t['linkedMeetingId'] = d.get('meetingId')
+            t['linkedMeetingTitle'] = d.get('meetingTitle')
+            t['linkedMeetingDate'] = d.get('meetingDate')
+            save_workspace(tasks)
+            return jsonify(t)
+    return jsonify({'error': 'Task not found'}), 404
+
+@app.route('/api/meetings/<mid>/linked-tasks')
+def api_linked_tasks(mid):
+    tasks = load_workspace()
+    linked = [t for t in tasks if t.get('linkedMeetingId') == mid]
+    return jsonify(linked)
+
+@app.route('/api/meetings/<mid>/draft-agenda', methods=['POST'])
+def api_draft_agenda(mid):
+    m, meetings = find_meeting(mid)
+    if not m:
+        return jsonify({'error': 'Meeting not found'}), 404
+    d = request.json or {}
+    api_key = d.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No API key configured.'}), 400
+    tasks = load_workspace()
+    linked = [t for t in tasks if t.get('linkedMeetingId') == mid and not t.get('completed')]
+    prev = [x for x in meetings if x.get('title') == m['title'] and x['id'] != mid and x.get('status') == 'completed' and x.get('summary')]
+    task_text = ''
+    if linked:
+        for t in linked:
+            task_text += '- ' + t['text'] + ' [' + (t.get('priority','medium')) + ' priority'
+            if t.get('dueDate'):
+                task_text += ', due ' + t['dueDate']
+            task_text += ']\n'
+    else:
+        task_text = '(No linked tasks)\n'
+    prev_text = ''
+    if prev:
+        for p in prev[-3:]:
+            prev_text += '- ' + p.get('scheduledDate','') + ': ' + (p.get('summary','')[:300]) + '\n'
+    else:
+        prev_text = '(No previous meetings with this title)\n'
+    prompt = f"""Draft a professional meeting agenda for "{m['title']}" scheduled for {m.get('scheduledDate','')} at {m.get('scheduledTime','')}.
+
+Linked tasks to follow up on:
+{task_text}
+Context from previous meetings with this title:
+{prev_text}
+Please create:
+1. A structured agenda with time allocations
+2. Key discussion points for each linked task
+3. Desired outcomes for the meeting
+4. Any prep work that should be done beforehand"""
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            messages=[{'role': 'user', 'content': prompt}]
+        )
+        return jsonify({'agenda': resp.content[0].text, 'prompt': prompt})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
@@ -391,6 +459,21 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 /* Ask Claude button */
 .btn-ask{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-ask:hover{opacity:.85}
+/* Link & Agenda */
+.link-dropdown{position:absolute;top:100%;right:0;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:50;width:260px;max-height:250px;overflow-y:auto}
+.link-dropdown .link-item{padding:6px 8px;cursor:pointer;border-radius:4px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.link-dropdown .link-item:hover{background:#f0f4ff}
+.link-dropdown .link-item .link-btn{background:#1a4fa3;color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;cursor:pointer}
+.ws-tag-linked{background:#e8f0fe;color:#1a4fa3;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
+.linked-tasks-section{background:#f8f9ff;border:1px solid #d4deff;border-radius:8px;padding:12px;margin-bottom:14px}
+.linked-tasks-section h4{color:#1a4fa3;font-size:.85rem;margin-bottom:8px}
+.linked-task-item{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;border-bottom:1px solid #eef}
+.linked-task-item:last-child{border-bottom:none}
+.linked-task-item input[type=checkbox]{width:15px;height:15px}
+.linked-task-item .lt-text{flex:1}
+.meeting-task-badge{font-size:11px;color:#1a4fa3;margin-left:4px}
+.agenda-modal .modal{width:600px}
+.agenda-content{white-space:pre-wrap;font-size:14px;line-height:1.6;max-height:400px;overflow-y:auto;background:#fafafa;border:1px solid #eee;border-radius:6px;padding:14px;margin:10px 0}
 /* Chat */
 .chat-container{max-width:800px;margin:0 auto}
 .chat-back{font-size:13px;color:#1a4fa3;cursor:pointer;background:none;border:none;font-weight:600;margin-bottom:10px;padding:0}
@@ -474,6 +557,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
         <h3 id="activeTitleEl" style="font-size:1.1rem"></h3>
         <span id="activeTime" style="font-size:.85rem;color:#888"></span>
       </div>
+      <div id="linkedTasksArea"></div>
       <div id="recControls" style="margin-top:12px;display:flex;gap:8px;align-items:center">
         <button class="btn btn-start" id="startBtn" onclick="startRec()">Start Recording</button>
         <button class="btn btn-stop" id="stopBtn" onclick="stopRec()" style="display:none">Stop Recording</button>
@@ -551,6 +635,22 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <textarea id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg();}"></textarea>
     <button class="btn btn-blue" onclick="sendChatMsg()">Send</button>
   </div>
+</div>
+</div>
+
+<!-- Agenda Modal -->
+<div class="modal-overlay agenda-modal" id="agendaModal">
+<div class="modal">
+  <h2 id="agendaTitle">Meeting Agenda</h2>
+  <div id="agendaLoading" style="display:none;text-align:center;padding:20px;color:#888"><span class="spinner" style="display:inline-block;width:18px;height:18px;border:3px solid #ddd;border-top-color:#1a4fa3;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px"></span> Generating agenda...</div>
+  <div class="agenda-content" id="agendaContent" style="display:none"></div>
+  <div id="agendaActions" class="modal-actions" style="display:none">
+    <button class="btn btn-blue" onclick="copyAgenda()">Copy</button>
+    <button class="btn btn-purple" onclick="downloadAgenda()">Download</button>
+    <button class="btn-ask" style="padding:6px 14px;font-size:13px" onclick="sendAgendaToChat()">Send to Claude &#10024;</button>
+    <button class="btn btn-gray" onclick="hideAgendaModal()">Close</button>
+  </div>
+  <div id="agendaError" class="error" style="margin-top:8px"></div>
 </div>
 </div>
 
@@ -708,8 +808,12 @@ function renderToday() {
     else if (m.status === 'recording') html += ' <span class="badge badge-recording">Recording</span>';
     else if (m.status === 'completed') html += ' <span class="badge badge-completed">Completed</span>';
     html += '</h4>';
-    html += '<div class="time">' + formatTime(m.scheduledTime) + '</div>';
+    html += '<div class="time">' + formatTime(m.scheduledTime);
+    var linkedCount = allTasks.filter(function(t){return t.linkedMeetingId===m.id && !t.completed;}).length;
+    if (linkedCount) html += ' <span class="meeting-task-badge">&#128203; ' + linkedCount + ' task' + (linkedCount>1?'s':'') + '</span>';
+    html += '</div>';
     if (m.notes) html += '<div style="font-size:12px;color:#888;margin-top:3px">' + escHtml(m.notes.substring(0,60)) + '</div>';
+    if (m.status === 'scheduled') html += '<div style="margin-top:6px"><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();draftAgenda(\'' + m.id + '\')">&#128196; Draft Agenda</button></div>';
     html += '</div>';
   });
   el.innerHTML = html;
@@ -760,6 +864,7 @@ function selectMeeting(id) {
   document.getElementById('error').textContent = '';
   document.getElementById('statusText').textContent = '';
   document.getElementById('timerEl').style.display = 'none';
+  renderLinkedTasks(id);
 
   if (m.status === 'recording') {
     document.getElementById('startBtn').style.display = 'none';
@@ -1224,13 +1329,15 @@ function renderTaskCard(t) {
     else if (!t.completed && t.dueDate === todayStr) dueCls = 'ws-tag ws-tag-due-today';
     html += '<span class="' + dueCls + '">Due: ' + t.dueDate + '</span>';
   }
+  if (t.linkedMeetingId && t.linkedMeetingTitle) {
+    html += '<span class="ws-tag ws-tag-linked" onclick="unlinkTask(\'' + t.id + '\')" title="Click to unlink">&#128197; ' + escHtml(t.linkedMeetingTitle) + (t.linkedMeetingDate ? ' - ' + t.linkedMeetingDate : '') + ' &times;</span>';
+  }
   html += '<span style="font-size:11px;color:#aaa">' + (t.createdAt||'').split('T')[0] + '</span>';
   html += '</div></div>';
   html += '<div class="ws-task-actions">';
   if (!t.completed) {
     html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
-  }
-  if (!t.completed) {
+    html += '<button class="btn btn-sm btn-outline" onclick="showLinkDropdown(\'' + t.id + '\',this)" title="Link to meeting">&#128197;</button>';
     html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">Ask Claude &#10024;</button>';
   }
   html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
@@ -1547,6 +1654,132 @@ function sendEODToChat() {
   if (!eodPromptGenerated) return;
   hideEOD();
   sendToClaudeChat(eodPromptGenerated, 'End of Day Review');
+}
+
+// --- Link Tasks to Meetings ---
+function renderLinkedTasks(meetingId) {
+  var el = document.getElementById('linkedTasksArea');
+  var linked = allTasks.filter(function(t) { return t.linkedMeetingId === meetingId; });
+  if (!linked.length) { el.innerHTML = ''; return; }
+  var html = '<div class="linked-tasks-section"><h4>&#128203; Linked Tasks (' + linked.length + ')</h4>';
+  linked.forEach(function(t) {
+    html += '<div class="linked-task-item">';
+    html += '<input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onchange="toggleWsTask(\'' + t.id + '\');setTimeout(function(){renderLinkedTasks(\'' + meetingId + '\')},300)">';
+    html += '<span class="lt-text' + (t.completed ? '" style="text-decoration:line-through;opacity:.5' : '') + '">' + escHtml(t.text) + '</span>';
+    html += '<span class="ws-tag ws-tag-' + (t.priority || 'medium') + '">' + (t.priority || 'medium') + '</span>';
+    if (!t.completed) html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">Ask Claude &#10024;</button>';
+    html += '</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+var activeLinkDropdown = null;
+function showLinkDropdown(taskId, btnEl) {
+  if (activeLinkDropdown) { activeLinkDropdown.remove(); activeLinkDropdown = null; }
+  var todayStr = today();
+  var meetings = allMeetings.filter(function(m) { return m.scheduledDate >= todayStr && m.status !== 'completed'; });
+  // also include today's completed ones
+  var todayMeetings = allMeetings.filter(function(m) { return m.scheduledDate === todayStr && m.status === 'completed'; });
+  meetings = meetings.concat(todayMeetings);
+  meetings.sort(function(a,b) { return (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime); });
+
+  var dd = document.createElement('div');
+  dd.className = 'link-dropdown';
+  var html = '';
+  if (!meetings.length) html = '<div style="font-size:13px;color:#888;padding:8px">No meetings to link to.</div>';
+  meetings.forEach(function(m) {
+    html += '<div class="link-item"><span>' + escHtml(m.title) + ' <span style="font-size:11px;color:#888">' + formatDate(m.scheduledDate) + '</span></span>'
+      + '<button class="link-btn" onclick="linkTaskToMeeting(\'' + taskId + '\',\'' + m.id + '\',\'' + escHtml(m.title).replace(/'/g, "\\'") + '\',\'' + m.scheduledDate + '\')">Link</button></div>';
+  });
+  dd.innerHTML = html;
+  btnEl.parentElement.style.position = 'relative';
+  btnEl.parentElement.appendChild(dd);
+  activeLinkDropdown = dd;
+  setTimeout(function() {
+    document.addEventListener('click', function closeDD(e) {
+      if (dd && !dd.contains(e.target) && e.target !== btnEl) { dd.remove(); activeLinkDropdown = null; document.removeEventListener('click', closeDD); }
+    });
+  }, 10);
+}
+
+async function linkTaskToMeeting(taskId, meetingId, meetingTitle, meetingDate) {
+  if (activeLinkDropdown) { activeLinkDropdown.remove(); activeLinkDropdown = null; }
+  await fetch('/api/tasks/' + taskId + '/link-meeting', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ meetingId: meetingId, meetingTitle: meetingTitle, meetingDate: meetingDate })
+  });
+  var t = allTasks.find(function(x) { return x.id === taskId; });
+  if (t) { t.linkedMeetingId = meetingId; t.linkedMeetingTitle = meetingTitle; t.linkedMeetingDate = meetingDate; }
+  renderWorkspace();
+  renderToday();
+}
+
+function unlinkTask(taskId) {
+  fetch('/api/tasks/' + taskId + '/link-meeting', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ meetingId: null, meetingTitle: null, meetingDate: null })
+  });
+  var t = allTasks.find(function(x) { return x.id === taskId; });
+  if (t) { t.linkedMeetingId = null; t.linkedMeetingTitle = null; t.linkedMeetingDate = null; }
+  renderWorkspace();
+  renderToday();
+}
+
+// --- Agenda ---
+var currentAgendaText = '';
+var currentAgendaMeetingTitle = '';
+
+async function draftAgenda(meetingId) {
+  document.getElementById('agendaModal').classList.add('show');
+  var m = allMeetings.find(function(x) { return x.id === meetingId; });
+  currentAgendaMeetingTitle = m ? m.title : 'Meeting';
+  document.getElementById('agendaTitle').textContent = 'Agenda: ' + currentAgendaMeetingTitle;
+  document.getElementById('agendaLoading').style.display = '';
+  document.getElementById('agendaContent').style.display = 'none';
+  document.getElementById('agendaActions').style.display = 'none';
+  document.getElementById('agendaError').textContent = '';
+
+  try {
+    var res = await fetch('/api/meetings/' + meetingId + '/draft-agenda', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ api_key: localStorage.getItem('anthropic_api_key') || '' })
+    });
+    var data = await res.json();
+    document.getElementById('agendaLoading').style.display = 'none';
+    if (data.error) { document.getElementById('agendaError').textContent = data.error; return; }
+    currentAgendaText = data.agenda;
+    document.getElementById('agendaContent').textContent = data.agenda;
+    document.getElementById('agendaContent').style.display = '';
+    document.getElementById('agendaActions').style.display = '';
+  } catch (err) {
+    document.getElementById('agendaLoading').style.display = 'none';
+    document.getElementById('agendaError').textContent = 'Failed: ' + err.message;
+  }
+}
+
+function hideAgendaModal() { document.getElementById('agendaModal').classList.remove('show'); }
+
+function copyAgenda() {
+  navigator.clipboard.writeText(currentAgendaText).then(function() {
+    var btns = document.querySelectorAll('#agendaActions .btn-blue');
+    if (btns[0]) { btns[0].textContent = 'Copied!'; setTimeout(function() { btns[0].textContent = 'Copy'; }, 2000); }
+  });
+}
+
+function downloadAgenda() {
+  var blob = new Blob([currentAgendaText], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = currentAgendaMeetingTitle.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '-') + '-Agenda-' + today() + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function sendAgendaToChat() {
+  hideAgendaModal();
+  sendToClaudeChat(currentAgendaText, 'Agenda: ' + currentAgendaMeetingTitle);
 }
 
 // --- Init ---
