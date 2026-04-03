@@ -185,7 +185,7 @@ def api_chat():
     try:
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             system="You are a helpful assistant for the COO of Vellum Health, a mobile IV services company serving skilled nursing facilities. Be direct, actionable, and concise. Consider HIPAA compliance where relevant.",
             messages=messages
@@ -207,7 +207,7 @@ def summarize():
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             messages=[{"role": "user", "content": f"""You are a meeting assistant. Analyze this transcript and return ONLY valid JSON with no markdown formatting.
 
