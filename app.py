@@ -313,9 +313,15 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .ws-tag{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
 .ws-tag-source{background:#e9ecef;color:#555}
 .ws-tag-date{background:#fff3cd;color:#856404}
-.ws-tag-high{background:#f8d7da;color:#721c24}
-.ws-tag-medium{background:#fff3cd;color:#856404}
-.ws-tag-low{background:#d4edda;color:#155724}
+.ws-tag-high{background:#f8d7da;color:#721c24;cursor:pointer}
+.ws-tag-medium{background:#fff3cd;color:#856404;cursor:pointer}
+.ws-tag-low{background:#d4edda;color:#155724;cursor:pointer}
+.ws-tag-due-today{background:#fff3cd;color:#856404;font-weight:700}
+.ws-tag-overdue{background:#f8d7da;color:#721c24;font-weight:700}
+.ws-sort-bar{display:flex;gap:6px;margin-bottom:10px;align-items:center;font-size:12px;color:#888}
+.ws-sort-bar span{margin-right:4px}
+.ws-sort-btn{padding:4px 10px;font-size:11px;border-radius:4px;border:1px solid #ddd;background:#fff;cursor:pointer;font-weight:600;color:#555}
+.ws-sort-btn.active{background:#1a4fa3;color:#fff;border-color:#1a4fa3}
 .ws-task-actions{display:flex;gap:4px;flex-shrink:0;align-items:center}
 .ws-task-actions select{font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px}
 .ws-task-actions input[type=date]{font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px}
@@ -426,11 +432,20 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <div class="ws-stats" id="wsStats"></div>
   <div class="ws-filters" id="wsFilters">
     <button class="ws-filter active" onclick="setWsFilter('all')">All</button>
-    <button class="ws-filter" onclick="setWsFilter('high')">High Priority</button>
+    <button class="ws-filter" onclick="setWsFilter('high')">High</button>
+    <button class="ws-filter" onclick="setWsFilter('medium')">Medium</button>
+    <button class="ws-filter" onclick="setWsFilter('low')">Low</button>
     <button class="ws-filter" onclick="setWsFilter('due-today')">Due Today</button>
+    <button class="ws-filter" onclick="setWsFilter('overdue')">Overdue</button>
     <button class="ws-filter" onclick="setWsFilter('this-week')">This Week</button>
-    <button class="ws-filter" onclick="setWsFilter('incomplete')">Incomplete</button>
     <button class="ws-filter" onclick="setWsFilter('completed')">Completed</button>
+  </div>
+  <div class="ws-sort-bar">
+    <span>Sort by:</span>
+    <button class="ws-sort-btn active" onclick="setWsSort('priority')">Priority</button>
+    <button class="ws-sort-btn" onclick="setWsSort('due')">Due Date</button>
+    <button class="ws-sort-btn" onclick="setWsSort('added')">Date Added</button>
+    <button class="ws-sort-btn" onclick="setWsSort('alpha')">A-Z</button>
   </div>
   <div class="ws-add-form">
     <input type="text" id="wsNewTask" placeholder="Add a new task..." onkeydown="if(event.key==='Enter')addManualTask()">
@@ -933,6 +948,7 @@ function switchAppTab(tab) {
 // --- Workspace ---
 var allTasks = [];
 var wsFilter = 'all';
+var wsSort = 'priority';
 var showCompleted = false;
 
 async function loadWorkspace() {
@@ -1000,6 +1016,24 @@ function setWsFilter(f) {
   renderWorkspace();
 }
 
+function setWsSort(s) {
+  wsSort = s;
+  document.querySelectorAll('.ws-sort-btn').forEach(function(b) { b.classList.remove('active'); });
+  event.target.classList.add('active');
+  renderWorkspace();
+}
+
+async function cyclePriority(id) {
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (!t || t.completed) return;
+  var cycle = {low:'medium', medium:'high', high:'low'};
+  var next = cycle[t.priority] || 'medium';
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ priority:next }) });
+  t.priority = next;
+  renderWorkspace();
+}
+
 function toggleCompletedTasks() {
   showCompleted = !showCompleted;
   renderWorkspace();
@@ -1015,9 +1049,11 @@ function filterTasks(tasks) {
   var weekEnd = getWeekEnd();
   switch(wsFilter) {
     case 'high': return tasks.filter(function(t){return !t.completed && t.priority==='high';});
+    case 'medium': return tasks.filter(function(t){return !t.completed && t.priority==='medium';});
+    case 'low': return tasks.filter(function(t){return !t.completed && t.priority==='low';});
     case 'due-today': return tasks.filter(function(t){return !t.completed && t.dueDate===todayStr;});
+    case 'overdue': return tasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate<todayStr;});
     case 'this-week': return tasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate>=todayStr && t.dueDate<=weekEnd;});
-    case 'incomplete': return tasks.filter(function(t){return !t.completed;});
     case 'completed': return tasks.filter(function(t){return t.completed;});
     default: return tasks;
   }
@@ -1028,19 +1064,28 @@ function renderWorkspace() {
   var weekEnd = getWeekEnd();
   var incomplete = allTasks.filter(function(t){return !t.completed;});
   var dueToday = allTasks.filter(function(t){return !t.completed && t.dueDate===todayStr;});
+  var overdue = allTasks.filter(function(t){return !t.completed && t.dueDate && t.dueDate<todayStr;});
   var highP = allTasks.filter(function(t){return !t.completed && t.priority==='high';});
   var weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
   var completedWeek = allTasks.filter(function(t){return t.completed && t.completedAt && t.completedAt>=weekStart.toISOString();});
   document.getElementById('wsStats').innerHTML =
     '<div class="ws-stat"><div class="num">'+incomplete.length+'</div><div class="label">Open Tasks</div></div>'
     +'<div class="ws-stat"><div class="num">'+dueToday.length+'</div><div class="label">Due Today</div></div>'
+    +'<div class="ws-stat"><div class="num">'+(overdue.length||0)+'</div><div class="label">Overdue</div></div>'
     +'<div class="ws-stat"><div class="num">'+highP.length+'</div><div class="label">High Priority</div></div>'
     +'<div class="ws-stat"><div class="num">'+completedWeek.length+'</div><div class="label">Done This Week</div></div>';
 
   var filtered = filterTasks(allTasks);
   var open = filtered.filter(function(t){return !t.completed;});
   var done = filtered.filter(function(t){return t.completed;});
-  open.sort(function(a,b) { var po = {high:0,medium:1,low:2}; return (po[a.priority]||1)-(po[b.priority]||1); });
+  // Sort
+  var po = {high:0,medium:1,low:2};
+  switch(wsSort) {
+    case 'priority': open.sort(function(a,b){return (po[a.priority]||1)-(po[b.priority]||1);}); break;
+    case 'due': open.sort(function(a,b){return (a.dueDate||'9999')< (b.dueDate||'9999')?-1:1;}); break;
+    case 'added': open.sort(function(a,b){return (b.createdAt||'').localeCompare(a.createdAt||'');}); break;
+    case 'alpha': open.sort(function(a,b){return (a.text||'').toLowerCase().localeCompare((b.text||'').toLowerCase());}); break;
+  }
 
   var el = document.getElementById('wsList');
   if (!open.length && wsFilter !== 'completed') { el.innerHTML = '<div class="empty">No tasks match this filter.</div>'; }
@@ -1057,6 +1102,7 @@ function renderWorkspace() {
 }
 
 function renderTaskCard(t) {
+  var todayStr = today();
   var cls = 'ws-task' + (t.completed ? ' done' : '');
   var html = '<div class="' + cls + '">';
   html += '<input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onchange="toggleWsTask(\'' + t.id + '\')">';
@@ -1064,16 +1110,25 @@ function renderTaskCard(t) {
   html += '<div class="ws-task-text">' + escHtml(t.text) + '</div>';
   html += '<div class="ws-task-meta">';
   html += '<span class="ws-tag ws-tag-source">From: ' + escHtml(t.source) + '</span>';
-  html += '<span class="ws-tag ws-tag-' + t.priority + '">' + t.priority + '</span>';
-  if (t.dueDate) html += '<span class="ws-tag ws-tag-date">Due: ' + t.dueDate + '</span>';
+  // Clickable priority badge
+  var pLabel = {high:'High',medium:'Medium',low:'Low'}[t.priority||'medium'] || 'Medium';
+  if (!t.completed) {
+    html += '<span class="ws-tag ws-tag-' + (t.priority||'medium') + '" onclick="cyclePriority(\'' + t.id + '\')" title="Click to change priority">' + pLabel + '</span>';
+  } else {
+    html += '<span class="ws-tag ws-tag-' + (t.priority||'medium') + '">' + pLabel + '</span>';
+  }
+  // Due date with overdue/today highlighting
+  if (t.dueDate) {
+    var dueCls = 'ws-tag ws-tag-date';
+    if (!t.completed && t.dueDate < todayStr) dueCls = 'ws-tag ws-tag-overdue';
+    else if (!t.completed && t.dueDate === todayStr) dueCls = 'ws-tag ws-tag-due-today';
+    html += '<span class="' + dueCls + '">Due: ' + t.dueDate + '</span>';
+  }
   html += '<span style="font-size:11px;color:#aaa">' + (t.createdAt||'').split('T')[0] + '</span>';
   html += '</div></div>';
   html += '<div class="ws-task-actions">';
   if (!t.completed) {
-    html += '<select onchange="updateWsPriority(\'' + t.id + '\',this.value)">';
-    ['high','medium','low'].forEach(function(p) { html += '<option value="'+p+'"'+(t.priority===p?' selected':'')+'>'+p+'</option>'; });
-    html += '</select>';
-    html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)">';
+    html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
   }
   html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
   html += '</div></div>';
