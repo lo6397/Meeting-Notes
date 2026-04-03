@@ -174,6 +174,25 @@ def api_ws_delete(tid):
     save_workspace(tasks)
     return jsonify({'ok': True})
 
+@app.route('/api/chat', methods=['POST'])
+def api_chat():
+    d = request.json
+    messages = d.get('messages', [])
+    api_key = d.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No API key configured.'}), 400
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system="You are a helpful assistant for the COO of Vellum Health, a mobile IV services company serving skilled nursing facilities. Be direct, actionable, and concise. Consider HIPAA compliance where relevant.",
+            messages=messages
+        )
+        return jsonify({'text': resp.content[0].text})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/summarize', methods=['POST'])
 def summarize():
     d = request.json
@@ -331,6 +350,23 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .action-add-btn{background:#28a745;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .action-add-btn:hover{background:#1e7e34}
 .action-add-btn.added{background:#6c757d;cursor:default}
+/* Ask Claude button */
+.btn-ask{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn-ask:hover{opacity:.85}
+/* Chat */
+.chat-container{max-width:800px;margin:0 auto}
+.chat-back{font-size:13px;color:#1a4fa3;cursor:pointer;background:none;border:none;font-weight:600;margin-bottom:10px;padding:0}
+.chat-back:hover{text-decoration:underline}
+.chat-source{font-size:12px;color:#6f42c1;background:#f3efff;padding:4px 10px;border-radius:6px;margin-bottom:10px;display:none}
+.chat-messages{background:#fff;border-radius:10px;padding:16px;min-height:300px;max-height:500px;overflow-y:auto;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.chat-msg{margin-bottom:14px}
+.chat-msg-user{text-align:right}
+.chat-msg-user .chat-bubble{background:#1a4fa3;color:#fff;display:inline-block;padding:10px 14px;border-radius:12px 12px 2px 12px;max-width:85%;text-align:left;font-size:14px;line-height:1.5}
+.chat-msg-assistant .chat-bubble{background:#f0f2f5;color:#1a1a2e;display:inline-block;padding:10px 14px;border-radius:12px 12px 12px 2px;max-width:85%;font-size:14px;line-height:1.5;white-space:pre-wrap}
+.chat-msg-highlight .chat-bubble{box-shadow:0 0 0 2px #6f42c1}
+.chat-input-row{display:flex;gap:8px}
+.chat-input-row textarea{flex:1;height:60px;resize:none;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:8px;font-family:inherit}
+.chat-typing{font-size:13px;color:#888;padding:6px 0;font-style:italic}
 /* EOD */
 .eod-btn{background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
 .eod-btn:hover{opacity:.9}
@@ -380,6 +416,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <button class="app-tab active" onclick="switchAppTab('meetings')">Today's Meetings</button>
   <button class="app-tab" onclick="switchAppTab('workspace')">Workspace</button>
   <button class="app-tab" onclick="switchAppTab('past')">Past Meetings</button>
+  <button class="app-tab" onclick="switchAppTab('chat')" id="chatTabBtn">Claude Chat</button>
 </div>
 
 <div id="tab-meetings" class="tab-content active">
@@ -464,6 +501,21 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 </div>
 </div>
 
+<div id="tab-chat" class="tab-content">
+<div class="chat-container">
+  <button class="chat-back" id="chatBack" onclick="goBackFromChat()" style="display:none"></button>
+  <div class="chat-source" id="chatSource"></div>
+  <div class="chat-messages" id="chatMessages">
+    <div class="empty">Start a conversation with Claude, or click "Ask Claude" from any task or meeting.</div>
+  </div>
+  <div class="chat-typing" id="chatTyping" style="display:none">Claude is thinking...</div>
+  <div class="chat-input-row">
+    <textarea id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg();}"></textarea>
+    <button class="btn btn-blue" onclick="sendChatMsg()">Send</button>
+  </div>
+</div>
+</div>
+
 <!-- EOD Overlay -->
 <div class="eod-overlay" id="eodOverlay">
 <div class="eod-container">
@@ -504,6 +556,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <div id="eodPromptArea" style="display:none">
     <div class="eod-prompt-box" id="eodPromptText"></div>
     <div class="eod-actions">
+      <button class="btn-ask" style="padding:8px 16px;font-size:14px" onclick="sendEODToChat()">Send to Claude &#10024;</button>
       <button class="btn btn-blue" onclick="copyEODPrompt()">Copy Prompt</button>
       <button class="btn btn-start" onclick="window.open('https://claude.ai','_blank')">Open Claude</button>
       <button class="btn btn-purple" onclick="downloadEODPrompt()">Download as .txt</button>
@@ -647,6 +700,7 @@ function renderPast() {
     if (preview) html += '<div class="preview">' + escHtml(preview) + '</div>';
     html += '</div>';
     html += '<div class="past-actions">';
+    html += '<button class="btn-ask" onclick="askClaudePastMeeting(\'' + m.id + '\')">Ask Claude &#10024;</button>';
     html += '<button class="btn btn-sm btn-purple" onclick="downloadPkg(\'' + m.id + '\')">Download</button>';
     html += '<button class="btn-icon" onclick="deleteMeeting(\'' + m.id + '\')" title="Delete">&#128465;</button>';
     html += '</div></div>';
@@ -706,6 +760,13 @@ function showResults(m) {
     btn.textContent = inWs ? '\u2713 In Workspace' : '+ Workspace';
     if (!inWs) btn.onclick = function() { addToWorkspace(a, m.title, m.id, btn); };
     li.appendChild(btn);
+    var askBtn = document.createElement('button');
+    askBtn.className = 'btn-ask';
+    askBtn.textContent = 'Ask Claude \u2728';
+    askBtn.onclick = (function(action, meeting) { return function() {
+      sendToClaudeChat('I just finished a meeting called "' + meeting.title + '".\nOne of my action items is: ' + action + '\nContext from the meeting: ' + (meeting.summary||'') + '\nPlease help me complete this task. Provide specific, actionable steps.', 'Meeting: ' + meeting.title);
+    }; })(a, m);
+    li.appendChild(askBtn);
     list.appendChild(li);
   });
   var pa = document.getElementById('promptsArea');
@@ -943,6 +1004,7 @@ function switchAppTab(tab) {
   if (tab === 'meetings') tabs[0].classList.add('active');
   else if (tab === 'workspace') { tabs[1].classList.add('active'); renderWorkspace(); }
   else if (tab === 'past') tabs[2].classList.add('active');
+  else if (tab === 'chat') tabs[3].classList.add('active');
 }
 
 // --- Workspace ---
@@ -1129,6 +1191,10 @@ function renderTaskCard(t) {
   html += '<div class="ws-task-actions">';
   if (!t.completed) {
     html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Set due date">';
+  }
+  if (!t.completed) {
+    var askMsg = 'I have a task on my to-do list: ' + t.text.replace(/'/g,"\\'") + '\\nPriority: ' + t.priority + (t.dueDate ? '\\nDue: '+t.dueDate : '') + (t.source && t.source!=='manual' ? '\\nThis came from: '+t.source.replace(/'/g,"\\'") : '') + '\\nPlease help me complete this. Provide specific steps and any relevant templates or drafts I can use immediately.';
+    html += '<button class="btn-ask" onclick="sendToClaudeChat(\'' + askMsg + '\',\'Task: ' + escHtml(t.text).substring(0,30).replace(/'/g,"\\'") + '\')">Ask Claude &#10024;</button>';
   }
   html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete">&#128465;</button>';
   html += '</div></div>';
@@ -1343,6 +1409,95 @@ async function deletePastEOD(id) {
   if (!confirm('Delete this EOD summary?')) return;
   await fetch('/api/eod/' + id, { method: 'DELETE' });
   loadPastEOD();
+}
+
+// --- Claude Chat ---
+var chatHistory = []; // {role, content}
+var previousTab = 'meetings';
+
+function sendToClaudeChat(message, sourceLabel) {
+  previousTab = getCurrentTab();
+  switchAppTab('chat');
+  document.getElementById('chatBack').style.display = '';
+  document.getElementById('chatBack').textContent = '\u2190 Back to ' + previousTab;
+  if (sourceLabel) {
+    document.getElementById('chatSource').style.display = '';
+    document.getElementById('chatSource').textContent = 'Sending from: ' + sourceLabel;
+  }
+  document.getElementById('chatInput').value = message;
+  sendChatMsg(true);
+}
+
+function getCurrentTab() {
+  if (document.getElementById('tab-meetings').classList.contains('active')) return 'meetings';
+  if (document.getElementById('tab-workspace').classList.contains('active')) return 'workspace';
+  if (document.getElementById('tab-past').classList.contains('active')) return 'past';
+  return 'meetings';
+}
+
+function goBackFromChat() {
+  switchAppTab(previousTab);
+  document.getElementById('chatBack').style.display = 'none';
+  document.getElementById('chatSource').style.display = 'none';
+}
+
+async function sendChatMsg(highlight) {
+  var input = document.getElementById('chatInput');
+  var text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  chatHistory.push({ role: 'user', content: text });
+  renderChatMessages(highlight);
+
+  document.getElementById('chatTyping').style.display = '';
+
+  try {
+    var res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: chatHistory, api_key: localStorage.getItem('anthropic_api_key') || '' })
+    });
+    var data = await res.json();
+    document.getElementById('chatTyping').style.display = 'none';
+    if (data.error) {
+      chatHistory.push({ role: 'assistant', content: 'Error: ' + data.error });
+    } else {
+      chatHistory.push({ role: 'assistant', content: data.text });
+    }
+    renderChatMessages(false);
+  } catch (err) {
+    document.getElementById('chatTyping').style.display = 'none';
+    chatHistory.push({ role: 'assistant', content: 'Request failed: ' + err.message });
+    renderChatMessages(false);
+  }
+}
+
+function renderChatMessages(highlightLast) {
+  var el = document.getElementById('chatMessages');
+  var html = '';
+  chatHistory.forEach(function(msg, i) {
+    var cls = 'chat-msg chat-msg-' + msg.role;
+    if (highlightLast && msg.role === 'user' && i === chatHistory.length - 1) cls += ' chat-msg-highlight';
+    html += '<div class="' + cls + '"><div class="chat-bubble">' + escHtml(msg.content) + '</div></div>';
+  });
+  if (!html) html = '<div class="empty">Start a conversation with Claude, or click "Ask Claude" from any task or meeting.</div>';
+  el.innerHTML = html;
+  el.scrollTop = el.scrollHeight;
+}
+
+function askClaudePastMeeting(id) {
+  var m = allMeetings.find(function(x) { return x.id === id; });
+  if (!m) return;
+  var incompleteActions = (m.actions || []).join(', ') || 'None listed';
+  var msg = 'Here is a past meeting summary I\'d like help with:\nMeeting: ' + m.title + ' on ' + formatDate(m.scheduledDate) + '\nSummary: ' + (m.summary || 'No summary') + '\nAction items: ' + incompleteActions + '\nWhat should I prioritize and how should I approach these?';
+  sendToClaudeChat(msg, 'Meeting: ' + m.title);
+}
+
+function sendEODToChat() {
+  if (!eodPromptGenerated) return;
+  hideEOD();
+  sendToClaudeChat(eodPromptGenerated, 'End of Day Review');
 }
 
 // --- Init ---
