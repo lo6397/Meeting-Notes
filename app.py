@@ -73,16 +73,31 @@ def ensure_admin_account():
     admin_email = os.environ.get('ADMIN_EMAIL', '')
     admin_pw = os.environ.get('ADMIN_PASSWORD', '')
     users = load_users()
+    changed = False
+
+    # Fix any admin with stale/placeholder email
+    if admin_email:
+        for u in users:
+            if u.get('role') == 'admin' and u['email'] != admin_email:
+                print(f"[Aria] Updating admin email: {u['email']} -> {admin_email}")
+                u['email'] = admin_email
+                changed = True
+            if u.get('role') == 'admin' and admin_pw:
+                u['passwordHash'] = generate_password_hash(admin_pw)
+                changed = True
+
+    if changed:
+        save_users(users)
 
     # Check if any admin already exists
     for u in users:
         if u.get('role') == 'admin':
             print(f"[Aria] Admin account exists: {u['email']}")
+            print(f"[Aria] Admin email: {u['email']}")
             return u
 
     if not admin_email or not admin_pw:
         print("[Aria] WARNING: No admin account and ADMIN_EMAIL/ADMIN_PASSWORD not set.")
-        print("[Aria] Set ADMIN_EMAIL and ADMIN_PASSWORD environment variables.")
         return None
 
     owner = {
@@ -100,6 +115,7 @@ def ensure_admin_account():
     users.append(owner)
     save_users(users)
     print(f"[Aria] Admin account created: {admin_email}")
+    print(f"[Aria] Admin email: {admin_email}")
     return owner
 
 def migrate_existing_data():
