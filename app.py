@@ -1698,6 +1698,7 @@ function renderZoneTask(t, showTriageButtons) {
       html += '</div>';
     }
     html += '<input type="date" value="'+(t.dueDate||'')+'" onchange="updateWsDue(\'' + t.id + '\',this.value)" title="Due date" style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;width:auto">';
+    html += '<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();showLinkDropdown(\'' + t.id + '\',this)" title="Link to meeting" style="font-size:11px;padding:2px 6px">&#128197;</button>';
     html += '<button class="btn-ask" onclick="askClaudeWorkspaceTask(\'' + t.id + '\')">&#10024;</button>';
   }
   html += '<button class="btn-icon" onclick="deleteWsTask(\'' + t.id + '\')" title="Delete" style="font-size:14px">&#128465;</button>';
