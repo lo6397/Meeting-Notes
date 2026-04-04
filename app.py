@@ -121,7 +121,7 @@ def backup():
 
 LOGIN_HTML = """
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign In - Meeting Recorder</title>
+<title>Sign In - Aria</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -137,8 +137,8 @@ input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #dd
 .reset-link:hover{color:#1a4fa3}
 </style></head><body>
 <div class="login-card">
-<div class="logo">Vellum Health</div>
-<div class="subtitle">Meeting Recorder</div>
+<div class="logo">Aria</div>
+<div class="subtitle">Your AI Operations Assistant</div>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 <form method="POST">
 <label>Password</label>
@@ -153,7 +153,7 @@ To reset your password, update the <strong>APP_PASSWORD</strong> environment var
 
 SETUP_HTML = """
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Setup - Meeting Recorder</title>
+<title>Setup - Aria</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -168,7 +168,7 @@ input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #dd
 .error{color:#dc3535;font-size:13px;margin-bottom:12px}
 </style></head><body>
 <div class="login-card">
-<div class="logo">Vellum Health</div>
+<div class="logo">Aria</div>
 <div class="subtitle">Create Your Password</div>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 <form method="POST">
@@ -563,7 +563,7 @@ def api_chat():
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,
-            system="You are a helpful assistant for the COO of Vellum Health, a mobile IV services company serving skilled nursing facilities. Be direct, actionable, and concise. Consider HIPAA compliance where relevant.",
+            system="You are Aria, a helpful AI operations assistant. Be direct, actionable, and concise. Help with meetings, tasks, scheduling, and workflow optimization.",
             messages=messages
         )
         return jsonify({'text': resp.content[0].text})
@@ -618,7 +618,7 @@ HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meeting Recorder</title>
+<title>Aria - AI Operations Assistant</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;color:#1a1a2e}
@@ -930,7 +930,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 <body>
 <div class="app">
 <header>
-  <h1>Meeting Recorder</h1>
+  <h1>Aria</h1>
   <div style="display:flex;gap:10px;align-items:center">
     <button class="eod-btn" onclick="showEOD()">&#127769; End of Day Review</button>
     <button class="gear-btn" onclick="toggleSettings()" title="Settings">&#9881;</button>
@@ -2286,7 +2286,7 @@ function generateMasterPrompt() {
 
   var prompt = '';
   prompt += '=== CONTEXT ===\n\n';
-  prompt += 'You are an AI assistant helping the COO of Vellum Health, a mobile IV services company serving skilled nursing facilities. The COO manages clinical operations, scheduling, HR, finance, and client relationships. Always consider HIPAA compliance. Be direct and actionable.\n\n';
+  prompt += 'You are Aria, an AI operations assistant. Help with task management, scheduling, delegation, and workflow optimization. Be direct and actionable.\n\n';
 
   prompt += '=== TODAY\'S ACCOMPLISHMENTS ===\n\n';
   if (meetings.length) {
