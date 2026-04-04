@@ -209,6 +209,22 @@ def build_system_prompt():
         parts.append("Compliance: " + ', '.join(ctx['compliance']) + '.')
     if ctx.get('priorities'):
         parts.append("Current priorities: " + ', '.join(ctx['priorities']) + '.')
+    if ctx.get('overview'):
+        parts.append("Company overview: " + ctx['overview'])
+    if ctx.get('challenges'):
+        parts.append("Current challenges: " + ctx['challenges'])
+    # Inject memory
+    memory_str = get_relevant_memory()
+    if memory_str:
+        parts.append("\nRecent context from meetings:\n" + memory_str)
+    # Open focus tasks
+    try:
+        tasks = load_workspace()
+        focus = [t for t in tasks if t.get('zone') == 'focus' and not t.get('completed')]
+        if focus:
+            parts.append("Today's focus tasks: " + ', '.join([t['text'] for t in focus[:5]]))
+    except Exception:
+        pass
     style = ctx.get('style', 'concise')
     if style == 'detailed':
         parts.append("Be thorough and detailed in responses.")
@@ -1077,6 +1093,130 @@ def api_doc_download(did):
     from flask import send_file
     return send_file(filepath, as_attachment=True, download_name=doc['originalName'])
 
+# ---- Memory & Context ----
+def load_memory():
+    return load_json_file(get_user_file('memory.json'))
+
+def save_memory(mem):
+    save_json_file(get_user_file('memory.json'), mem)
+
+def load_context():
+    ctx = load_json_file(get_user_file('context.json'))
+    if isinstance(ctx, list):
+        return {}
+    return ctx if ctx else {}
+
+def save_context(ctx):
+    save_json_file(get_user_file('context.json'), ctx)
+
+def extract_memory_from_summary(meeting_title, summary, actions, meeting_date):
+    """Use Claude to extract people, decisions, facts from a meeting summary."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key or not summary:
+        return
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=1024,
+            messages=[{'role': 'user', 'content': f'Extract memory from this meeting summary. Return ONLY valid JSON:\n{{"people":[{{"name":"","role":"","context":""}}],"decisions":[{{"decision":"","context":""}}],"facts":[{{"fact":"","context":""}}]}}\n\nMeeting: {meeting_title} ({meeting_date})\nSummary: {summary}\nAction items: {json.dumps(actions)}'}]
+        )
+        text = resp.content[0].text.strip()
+        if text.startswith('```'): text = text.split('\n',1)[1] if '\n' in text else text[3:]
+        if text.endswith('```'): text = text[:-3]
+        extracted = json.loads(text.strip())
+
+        mem = load_memory()
+        if not isinstance(mem, dict):
+            mem = {'people': [], 'decisions': [], 'facts': []}
+
+        now = datetime.now().isoformat()
+        for p in extracted.get('people', []):
+            if p.get('name'):
+                existing = next((x for x in mem.get('people', []) if x['name'].lower() == p['name'].lower()), None)
+                if existing:
+                    existing['lastMentioned'] = now
+                    if p.get('context'): existing['context'] = p['context']
+                else:
+                    mem.setdefault('people', []).append({'name': p['name'], 'role': p.get('role', ''), 'context': p.get('context', ''), 'lastMentioned': now})
+
+        for d in extracted.get('decisions', []):
+            if d.get('decision'):
+                mem.setdefault('decisions', []).append({'decision': d['decision'], 'context': d.get('context', ''), 'meetingTitle': meeting_title, 'date': meeting_date, 'madeAt': now})
+
+        for f in extracted.get('facts', []):
+            if f.get('fact'):
+                mem.setdefault('facts', []).append({'fact': f['fact'], 'source': meeting_title, 'date': meeting_date, 'addedAt': now})
+
+        save_memory(mem)
+    except Exception:
+        pass
+
+def get_relevant_memory(query=''):
+    """Get recent memory entries for context injection."""
+    mem = load_memory()
+    if not isinstance(mem, dict):
+        return ''
+    parts = []
+    people = mem.get('people', [])[-10:]
+    if people:
+        parts.append('Known people: ' + ', '.join([p['name'] + (' (' + p['role'] + ')' if p.get('role') else '') for p in people]))
+    decisions = mem.get('decisions', [])[-5:]
+    if decisions:
+        parts.append('Recent decisions: ' + '; '.join([d['decision'] for d in decisions]))
+    facts = mem.get('facts', [])[-5:]
+    if facts:
+        parts.append('Key facts: ' + '; '.join([f['fact'] for f in facts]))
+    return '\n'.join(parts)
+
+@app.route('/api/context', methods=['GET'])
+@login_required
+def api_context_get():
+    return jsonify(load_context())
+
+@app.route('/api/context', methods=['PUT'])
+@login_required
+def api_context_update():
+    d = request.json
+    ctx = load_context()
+    for k in ['company','overview','priorities','team','projects','facilities','challenges']:
+        if k in d:
+            ctx[k] = d[k]
+    ctx['updatedAt'] = datetime.now().isoformat()
+    save_context(ctx)
+    return jsonify(ctx)
+
+@app.route('/api/memory', methods=['GET'])
+@login_required
+def api_memory_get():
+    mem = load_memory()
+    if not isinstance(mem, dict):
+        return jsonify({'people': [], 'decisions': [], 'facts': []})
+    return jsonify(mem)
+
+@app.route('/api/memory', methods=['DELETE'])
+@login_required
+def api_memory_clear():
+    save_memory({'people': [], 'decisions': [], 'facts': []})
+    return jsonify({'ok': True})
+
+@app.route('/api/memory/edit', methods=['POST'])
+@login_required
+def api_memory_edit():
+    d = request.json
+    mem = load_memory()
+    if not isinstance(mem, dict):
+        mem = {'people': [], 'decisions': [], 'facts': []}
+    category = d.get('category')
+    index = d.get('index')
+    action = d.get('action', 'delete')
+    if category in mem and isinstance(index, int) and 0 <= index < len(mem[category]):
+        if action == 'delete':
+            mem[category].pop(index)
+        elif action == 'update' and d.get('data'):
+            mem[category][index].update(d['data'])
+        save_memory(mem)
+    return jsonify(mem)
+
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def api_chat():
@@ -1133,7 +1273,13 @@ TRANSCRIPT:
         if text.endswith('```'):
             text = text[:-3]
         text = text.strip()
-        return jsonify(json.loads(text))
+        result = json.loads(text)
+        # Extract memory in background
+        try:
+            extract_memory_from_summary(title, result.get('summary',''), result.get('actions',[]), date.today().isoformat())
+        except Exception:
+            pass
+        return jsonify(result)
     except json.JSONDecodeError:
         return jsonify({'error': 'Failed to parse AI response. Try again.'}), 500
     except Exception as e:
