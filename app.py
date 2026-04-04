@@ -68,56 +68,69 @@ def save_invites(invites):
         json.dump(invites, f, indent=2)
 
 # ---- Migrate existing data to owner account ----
-def migrate_existing_data():
-    admin_email = os.environ.get('ADMIN_EMAIL', 'admin@localhost')
-    admin_pw = os.environ.get('ADMIN_PASSWORD', os.environ.get('APP_PASSWORD', ''))
+def ensure_admin_account():
+    """Create admin account on first run if ADMIN_EMAIL and ADMIN_PASSWORD are set."""
+    admin_email = os.environ.get('ADMIN_EMAIL', '')
+    admin_pw = os.environ.get('ADMIN_PASSWORD', '')
     users = load_users()
 
-    # Check if owner already exists
-    owner = None
+    # Check if any admin already exists
     for u in users:
         if u.get('role') == 'admin':
-            owner = u
-            break
+            print(f"[Aria] Admin account exists: {u['email']}")
+            return u
 
-    if not owner and admin_pw:
-        owner = {
-            'id': uuid.uuid4().hex[:8],
-            'email': admin_email,
-            'passwordHash': generate_password_hash(admin_pw),
-            'name': 'Admin',
-            'role': 'admin',
-            'company': '',
-            'createdAt': datetime.now().isoformat(),
-            'lastLogin': None,
-            'onboardingComplete': False,
-            'plan': 'owner'
-        }
-        users.append(owner)
-        save_users(users)
+    if not admin_email or not admin_pw:
+        print("[Aria] WARNING: No admin account and ADMIN_EMAIL/ADMIN_PASSWORD not set.")
+        print("[Aria] Set ADMIN_EMAIL and ADMIN_PASSWORD environment variables.")
+        return None
 
+    owner = {
+        'id': uuid.uuid4().hex[:8],
+        'email': admin_email,
+        'passwordHash': generate_password_hash(admin_pw),
+        'name': 'Admin',
+        'role': 'admin',
+        'company': '',
+        'createdAt': datetime.now().isoformat(),
+        'lastLogin': None,
+        'onboardingComplete': False,
+        'plan': 'owner'
+    }
+    users.append(owner)
+    save_users(users)
+    print(f"[Aria] Admin account created: {admin_email}")
+    return owner
+
+def migrate_existing_data():
+    owner = ensure_admin_account()
     if not owner:
         return
 
     # Move old data files into owner's directory
     owner_dir = user_data_dir(owner['id'])
-    old_files = {
-        'meetings.json': os.path.join(DATA_DIR, 'meetings.json'),
-        'workspace.json': os.path.join(DATA_DIR, 'workspace.json'),
-        'eod_summaries.json': os.path.join(DATA_DIR, 'eod_summaries.json'),
-    }
-    # Also check app root
     _app_root = os.path.dirname(os.path.abspath(__file__))
+
+    # First move root-level files to DATA_DIR
     for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json']:
         root_path = os.path.join(_app_root, fname)
-        if os.path.exists(root_path) and not os.path.exists(os.path.join(DATA_DIR, fname)):
-            shutil.move(root_path, os.path.join(DATA_DIR, fname))
+        data_path = os.path.join(DATA_DIR, fname)
+        if os.path.exists(root_path) and not os.path.exists(data_path):
+            shutil.move(root_path, data_path)
+            print(f"[Aria] Migrated {fname} from app root to DATA_DIR")
 
-    for fname, old_path in old_files.items():
+    # Then move DATA_DIR files to owner's user directory
+    for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json']:
+        old_path = os.path.join(DATA_DIR, fname)
         new_path = os.path.join(owner_dir, fname)
         if os.path.exists(old_path) and not os.path.exists(new_path):
             shutil.move(old_path, new_path)
+            print(f"[Aria] Migrated {fname} to owner directory")
 
+print("[Aria] Starting up...")
+print(f"[Aria] DATA_DIR: {DATA_DIR}")
+print(f"[Aria] ADMIN_EMAIL set: {bool(os.environ.get('ADMIN_EMAIL'))}")
+print(f"[Aria] ADMIN_PASSWORD set: {bool(os.environ.get('ADMIN_PASSWORD'))}")
 migrate_existing_data()
 
 # ---- Per-user data helpers ----
@@ -350,6 +363,27 @@ function saveOnboarding() {
 }
 </script>
 </body></html>"""
+
+@app.route('/setup-admin')
+def setup_admin():
+    """Temporary endpoint to manually trigger admin account creation."""
+    admin_email = os.environ.get('ADMIN_EMAIL', '')
+    admin_pw = os.environ.get('ADMIN_PASSWORD', '')
+    if not admin_email or not admin_pw:
+        return jsonify({
+            'status': 'error',
+            'message': 'ADMIN_EMAIL and ADMIN_PASSWORD environment variables must be set',
+            'ADMIN_EMAIL_set': bool(admin_email),
+            'ADMIN_PASSWORD_set': bool(admin_pw)
+        }), 400
+    users = load_users()
+    for u in users:
+        if u.get('role') == 'admin':
+            return jsonify({'status': 'exists', 'email': u['email'], 'id': u['id']})
+    owner = ensure_admin_account()
+    if owner:
+        return jsonify({'status': 'created', 'email': owner['email'], 'id': owner['id']})
+    return jsonify({'status': 'error', 'message': 'Failed to create admin'}), 500
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
