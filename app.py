@@ -1150,6 +1150,19 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .zm-backlog{background:#e2e8f0;color:#718096}
 .waiting-info{font-size:12px;color:#975a16;display:flex;align-items:center;gap:4px}
 .waiting-input{font-size:12px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;width:120px}
+/* Assistant Mode */
+.assist-bar{position:fixed;bottom:0;left:0;right:0;background:#1a1a2e;color:#fff;padding:12px 20px;z-index:95;display:none;align-items:center;gap:12px;font-size:14px;box-shadow:0 -2px 12px rgba(0,0,0,.2)}
+.assist-bar.show{display:flex}
+.assist-bar .rec-dot{width:12px;height:12px;border-radius:50%;background:#dc3535;animation:pulse 1.2s infinite;flex-shrink:0}
+.assist-bar .assist-timer{font-weight:700;font-variant-numeric:tabular-nums;min-width:40px}
+.assist-bar .assist-text{flex:1;color:#aaa;font-size:13px}
+.assist-bar button{background:#dc3535;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.assist-bar button:hover{background:#b82e2e}
+.assist-modal .modal{width:400px}
+.assist-options{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.assist-options button{flex:1;padding:10px;font-size:13px;font-weight:600;border:none;border-radius:6px;cursor:pointer;min-width:100px}
+.btn-assist{background:linear-gradient(135deg,#dc3535,#e67e22);color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-assist:hover{opacity:.9}
 /* Quick Capture */
 .quick-capture-fab{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#1a4fa3,#6f42c1);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);z-index:90;display:flex;align-items:center;justify-content:center}
 .quick-capture-fab:hover{transform:scale(1.1);box-shadow:0 6px 20px rgba(0,0,0,.3)}
@@ -1290,7 +1303,43 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .week-add{text-align:center;margin-top:4px}
 .week-add button{background:none;border:1px dashed #ccc;border-radius:4px;width:100%;padding:2px;font-size:14px;cursor:pointer;color:#888}
 .week-add button:hover{border-color:#1a4fa3;color:#1a4fa3}
-@media(max-width:768px){.main{flex-direction:column}.left-panel{width:100%}.eod-main{flex-direction:column}.week-grid{grid-template-columns:repeat(3,1fr)}.left-panel{width:100%}}
+/* Mobile bottom nav */
+.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #ddd;z-index:80;padding:6px 0 env(safe-area-inset-bottom,6px)}
+.mobile-nav-inner{display:flex;justify-content:space-around}
+.mobile-nav button{background:none;border:none;font-size:11px;color:#888;cursor:pointer;padding:6px 0;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:60px}
+.mobile-nav button.active{color:#1a4fa3;font-weight:600}
+.mobile-nav button .nav-icon{font-size:20px}
+.mobile-back{display:none;background:none;border:none;font-size:14px;color:#1a4fa3;font-weight:600;cursor:pointer;padding:8px 0;margin-bottom:8px}
+@media(max-width:768px){
+  .app-tabs{display:none}
+  .mobile-nav{display:block}
+  .main{flex-direction:column;gap:12px}
+  .left-panel,.left-panel.week-mode{width:100%!important}
+  .right-panel{padding:16px}
+  .week-grid{grid-template-columns:repeat(3,1fr)}
+  .eod-main{flex-direction:column}
+  header h1{font-size:1.2rem}
+  .eod-btn{font-size:12px;padding:8px 14px}
+  .modal .modal,.assist-modal .modal{width:95vw;max-width:95vw;padding:20px}
+  textarea{min-height:100px}
+  .zone-task{flex-wrap:wrap}
+  .zone-task-actions{width:100%;justify-content:flex-end;margin-top:6px}
+  .zone-move-btns{flex-wrap:wrap}
+  .ws-stats{gap:6px}
+  .ws-stat{min-width:70px;padding:8px}
+  .ws-stat .num{font-size:1.1rem}
+  .quick-capture-fab{bottom:70px}
+  .assist-bar{bottom:56px}
+  .mobile-back{display:block}
+  .past-card{flex-direction:column;gap:8px}
+  .past-card .past-actions{width:100%;justify-content:flex-end}
+  button,.btn,.btn-ask,.action-add-btn,.card-icon-btn{min-height:44px;min-width:44px}
+  .chat-input-row textarea{min-height:44px}
+}
+@media(min-width:769px) and (max-width:1024px){
+  .left-panel{width:280px}
+  .left-panel.week-mode{width:440px}
+}
 </style>
 </head>
 <body>
@@ -1325,6 +1374,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <div class="panel-actions">
       <button class="btn btn-outline" onclick="showAddModal()">+ Add Meeting</button>
       <button class="btn btn-gray" onclick="adHocMeeting()">Ad Hoc</button>
+      <button class="btn-assist" onclick="startAssistant()">&#127908; Assistant</button>
     </div>
   </div>
   <div class="right-panel">
@@ -1436,6 +1486,38 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 </div>
 
 <!-- Quick Capture FAB -->
+<!-- Assistant Recording Bar -->
+<div class="assist-bar" id="assistBar">
+  <div class="rec-dot"></div>
+  <span>Assistant recording...</span>
+  <span class="assist-timer" id="assistTimerEl">0:00</span>
+  <span class="assist-text" id="assistPreview"></span>
+  <button onclick="stopAssistant()">Stop &amp; Process</button>
+</div>
+
+<!-- Assistant Process Modal -->
+<div class="modal-overlay assist-modal" id="assistModal">
+<div class="modal">
+  <h2>What was this about?</h2>
+  <input type="text" id="assistTitle" placeholder="Quick title (optional)" style="margin:12px 0">
+  <div class="assist-options">
+    <button style="background:#1a4fa3;color:#fff" onclick="saveAssistant('meeting')">Save as Meeting</button>
+    <button style="background:#6f42c1;color:#fff" onclick="saveAssistant('note')">Save as Note</button>
+    <button style="background:#e2e8f0;color:#555" onclick="discardAssistant()">Discard</button>
+  </div>
+</div>
+</div>
+
+<!-- Mobile Bottom Nav -->
+<div class="mobile-nav" id="mobileNav">
+<div class="mobile-nav-inner">
+  <button onclick="mobileTab('meetings')" id="mnav-meetings" class="active"><span class="nav-icon">&#128197;</span>Today</button>
+  <button onclick="mobileTab('workspace')" id="mnav-workspace"><span class="nav-icon">&#9745;</span>Work</button>
+  <button onclick="mobileTab('past')" id="mnav-past"><span class="nav-icon">&#128214;</span>Past</button>
+  <button onclick="mobileTab('chat')" id="mnav-chat"><span class="nav-icon">&#128172;</span>Chat</button>
+</div>
+</div>
+
 <button class="quick-capture-fab" onclick="toggleQuickCapture()" title="Quick capture">+</button>
 <div class="quick-capture-popup" id="qcPopup">
   <h4>Quick Capture</h4>
@@ -3360,6 +3442,117 @@ async function deduplicateRecurring() {
     allMeetings = allMeetings.filter(function(m){ return toDelete.indexOf(m.id) === -1; });
     renderToday();
   }
+}
+
+// --- Assistant Mode ---
+var assistRecognition = null;
+var assistIsRecording = false;
+var assistTranscript = '';
+var assistTimer = null;
+var assistSeconds = 0;
+
+function startAssistant() {
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Speech recognition not supported. Use Chrome.'); return; }
+
+  assistTranscript = '';
+  assistSeconds = 0;
+  assistIsRecording = true;
+
+  assistRecognition = new SR();
+  assistRecognition.continuous = true;
+  assistRecognition.interimResults = true;
+  assistRecognition.lang = 'en-US';
+  var existingText = '';
+
+  assistRecognition.onresult = function(e) {
+    var newText = '';
+    for (var i = 0; i < e.results.length; i++) newText += e.results[i][0].transcript + ' ';
+    assistTranscript = existingText + newText;
+    var preview = assistTranscript.substring(assistTranscript.length - 60);
+    document.getElementById('assistPreview').textContent = '...' + preview;
+  };
+  assistRecognition.onerror = function(e) { if (e.error === 'aborted' || e.error === 'no-speech') return; };
+  assistRecognition.onend = function() {
+    if (assistIsRecording) {
+      existingText = assistTranscript;
+      setTimeout(function() { try { assistRecognition.start(); } catch(e) {} }, 100);
+    }
+  };
+  assistRecognition.start();
+
+  document.getElementById('assistBar').classList.add('show');
+  assistTimer = setInterval(function() {
+    assistSeconds++;
+    var m = Math.floor(assistSeconds / 60);
+    var s = String(assistSeconds % 60).padStart(2, '0');
+    document.getElementById('assistTimerEl').textContent = m + ':' + s;
+  }, 1000);
+}
+
+function stopAssistant() {
+  assistIsRecording = false;
+  if (assistRecognition) { try { assistRecognition.abort(); } catch(e) {} assistRecognition = null; }
+  if (assistTimer) { clearInterval(assistTimer); assistTimer = null; }
+  document.getElementById('assistBar').classList.remove('show');
+  if (!assistTranscript.trim()) { alert('No speech detected.'); return; }
+  document.getElementById('assistTitle').value = '';
+  document.getElementById('assistModal').classList.add('show');
+}
+
+async function saveAssistant(type) {
+  document.getElementById('assistModal').classList.remove('show');
+  var title = document.getElementById('assistTitle').value.trim();
+  var now = new Date();
+  if (!title) title = (type === 'note' ? 'Note' : 'Assistant Meeting') + ' - ' + now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+
+  var m = await apiCreate({
+    title: title,
+    scheduledDate: today(),
+    scheduledTime: now.toTimeString().slice(0, 5),
+    status: 'completed',
+    transcript: assistTranscript
+  });
+  allMeetings.push(m);
+
+  // Run AI summary
+  try {
+    var res = await fetch('/summarize', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ transcript: assistTranscript, title: title, api_key: localStorage.getItem('anthropic_api_key') || '' })
+    });
+    var data = await res.json();
+    if (!data.error) {
+      await apiUpdate(m.id, {
+        summary: data.summary || '', actions: data.actions || [],
+        prompts: data.prompts || [], completedAt: now.toISOString()
+      });
+      m.summary = data.summary; m.actions = data.actions || []; m.prompts = data.prompts || [];
+      m.completedAt = now.toISOString();
+    }
+  } catch(err) {}
+
+  assistTranscript = '';
+  renderToday(); renderPast();
+
+  if (type === 'meeting' && m.actions && m.actions.length) {
+    _showResultsMeeting = m;
+    window._wrapupMeeting = m;
+    showWrapup();
+  }
+}
+
+function discardAssistant() {
+  document.getElementById('assistModal').classList.remove('show');
+  assistTranscript = '';
+}
+
+// --- Mobile Navigation ---
+function mobileTab(tab) {
+  switchAppTab(tab);
+  document.querySelectorAll('.mobile-nav button').forEach(function(b) { b.classList.remove('active'); });
+  var btn = document.getElementById('mnav-' + tab);
+  if (btn) btn.classList.add('active');
 }
 
 // --- Init ---
