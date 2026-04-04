@@ -88,7 +88,11 @@ def api_create():
         'actions': [],
         'prompts': [],
         'createdAt': datetime.now().isoformat(),
-        'completedAt': ''
+        'completedAt': '',
+        'isRecurring': d.get('isRecurring', False),
+        'recurringFrequency': d.get('recurringFrequency'),
+        'recurringEndDate': d.get('recurringEndDate'),
+        'recurringParentId': d.get('recurringParentId')
     }
     meetings = load_meetings()
     meetings.append(m)
@@ -101,7 +105,7 @@ def api_update(mid):
     if not m:
         return jsonify({'error': 'Not found'}), 404
     d = request.json
-    for k in ['title','status','transcript','summary','actions','prompts','completedAt','scheduledDate','scheduledTime','notes']:
+    for k in ['title','status','transcript','summary','actions','prompts','completedAt','scheduledDate','scheduledTime','notes','isRecurring','recurringFrequency','recurringEndDate','recurringParentId']:
         if k in d:
             m[k] = d[k]
     save_meetings(meetings)
@@ -937,6 +941,19 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <input type="time" id="addTime">
     <label for="addNotes">Notes / Agenda</label>
     <textarea id="addNotes" style="height:80px" placeholder="Optional agenda items..."></textarea>
+    <div style="margin-top:10px;padding:10px;background:#f7fafc;border-radius:6px">
+      <label style="display:flex;align-items:center;gap:8px;margin:0"><input type="checkbox" id="addRecurring" onchange="toggleRecurringFields()"> Make this a recurring meeting</label>
+      <div id="recurringFields" style="display:none;margin-top:8px">
+        <label for="addRecurFreq">Frequency</label>
+        <select id="addRecurFreq" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px">
+          <option value="weekly">Weekly</option>
+          <option value="biweekly">Biweekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+        <label for="addRecurEnd">End Date (optional)</label>
+        <input type="date" id="addRecurEnd">
+      </div>
+    </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-gray" onclick="hideAddModal()">Cancel</button>
       <button type="submit" class="btn btn-blue">Save</button>
@@ -965,7 +982,11 @@ function toggleSettings() {
 
 // --- Helpers ---
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-function today() { return new Date().toISOString().split('T')[0]; }
+function today() {
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+var viewingDate = today();
 function formatTime(t) {
   if (!t) return '';
   var parts = t.split(':'); var h = parseInt(parts[0]); var m = parts[1];
@@ -1009,12 +1030,16 @@ async function apiDelete(id) {
 
 // --- Render Today ---
 function renderToday() {
-  var todayStr = today();
-  document.getElementById('todayLabel').textContent = "Today's Meetings - " + formatDate(todayStr);
-  var list = allMeetings.filter(function(m) { return m.scheduledDate === todayStr; });
+  var isToday = viewingDate === today();
+  var label = isToday ? "Today's Meetings" : 'Meetings';
+  document.getElementById('todayLabel').innerHTML = '<button class="btn btn-sm" onclick="navDate(-1)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-right:6px;font-size:14px;cursor:pointer">&larr;</button>'
+    + label + ' - ' + formatDate(viewingDate)
+    + '<button class="btn btn-sm" onclick="navDate(1)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-left:6px;font-size:14px;cursor:pointer">&rarr;</button>'
+    + (!isToday ? ' <button class="btn btn-sm btn-blue" onclick="navToday()" style="padding:2px 8px;margin-left:6px;font-size:11px">Today</button>' : '');
+  var list = allMeetings.filter(function(m) { return m.scheduledDate === viewingDate; });
   list.sort(function(a,b) { return (a.scheduledTime||'').localeCompare(b.scheduledTime||''); });
   var el = document.getElementById('todayList');
-  if (!list.length) { el.innerHTML = '<div class="empty">No meetings scheduled for today.</div>'; return; }
+  if (!list.length) { el.innerHTML = '<div class="empty">No meetings scheduled for ' + formatDate(viewingDate) + '.</div>'; return; }
   var html = '';
   list.forEach(function(m) {
     var cls = 'today-card status-' + m.status;
@@ -1024,6 +1049,10 @@ function renderToday() {
     if (m.status === 'scheduled') html += ' <span class="badge badge-scheduled">Scheduled</span>';
     else if (m.status === 'recording') html += ' <span class="badge badge-recording">Recording</span>';
     else if (m.status === 'completed') html += ' <span class="badge badge-completed">Completed</span>';
+    if (m.isRecurring || m.recurringParentId) {
+      var freq = m.recurringFrequency || 'weekly';
+      html += ' <span class="badge badge-scheduled" style="background:#e0e7ff;color:#3730a3">&#128257; ' + freq.charAt(0).toUpperCase()+freq.slice(1) + '</span>';
+    }
     html += '</h4>';
     html += '<div class="time">' + formatTime(m.scheduledTime);
     var linkedCount = allTasks.filter(function(t){return t.linkedMeetingId===m.id && !t.completed;}).length;
@@ -1035,6 +1064,14 @@ function renderToday() {
   });
   el.innerHTML = html;
 }
+
+function navDate(offset) {
+  var d = new Date(viewingDate + 'T12:00:00');
+  d.setDate(d.getDate() + offset);
+  viewingDate = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  renderToday();
+}
+function navToday() { viewingDate = today(); renderToday(); }
 
 
 // --- Render Past ---
@@ -1221,24 +1258,56 @@ function clearRight() {
 
 // --- Add Meeting ---
 function showAddModal() {
-  document.getElementById('addDate').value = today();
+  document.getElementById('addDate').value = viewingDate;
   document.getElementById('addTime').value = roundTime();
   document.getElementById('addTitle').value = '';
   document.getElementById('addNotes').value = '';
+  document.getElementById('addRecurring').checked = false;
+  document.getElementById('recurringFields').style.display = 'none';
+  document.getElementById('addRecurEnd').value = '';
   document.getElementById('addModal').classList.add('show');
   document.getElementById('addTitle').focus();
 }
 function hideAddModal() { document.getElementById('addModal').classList.remove('show'); }
+function toggleRecurringFields() {
+  document.getElementById('recurringFields').style.display = document.getElementById('addRecurring').checked ? '' : 'none';
+}
 async function addMeeting(e) {
   e.preventDefault();
+  var title = document.getElementById('addTitle').value.trim();
+  var schedDate = document.getElementById('addDate').value;
+  var schedTime = document.getElementById('addTime').value;
+  var notes = document.getElementById('addNotes').value.trim();
+  var isRecurring = document.getElementById('addRecurring').checked;
+
   var m = await apiCreate({
-    title: document.getElementById('addTitle').value.trim(),
-    scheduledDate: document.getElementById('addDate').value,
-    scheduledTime: document.getElementById('addTime').value,
-    notes: document.getElementById('addNotes').value.trim()
+    title: title, scheduledDate: schedDate, scheduledTime: schedTime, notes: notes
   });
-  hideAddModal();
   allMeetings.push(m);
+
+  if (isRecurring) {
+    var freq = document.getElementById('addRecurFreq').value;
+    var endDate = document.getElementById('addRecurEnd').value;
+    // Update parent as recurring
+    await apiUpdate(m.id, { isRecurring: true, recurringFrequency: freq, recurringEndDate: endDate || null });
+    m.isRecurring = true; m.recurringFrequency = freq; m.recurringEndDate = endDate || null;
+    // Generate instances for next 8 weeks
+    var d = new Date(schedDate + 'T12:00:00');
+    var step = freq === 'monthly' ? 0 : (freq === 'biweekly' ? 14 : 7);
+    for (var w = 1; w <= (freq === 'monthly' ? 8 : 8); w++) {
+      if (freq === 'monthly') { d.setMonth(d.getMonth() + 1); }
+      else { d.setDate(d.getDate() + step); }
+      var nd = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      if (endDate && nd > endDate) break;
+      var inst = await apiCreate({
+        title: title, scheduledDate: nd, scheduledTime: schedTime, notes: notes,
+        recurringParentId: m.id, recurringFrequency: freq, isRecurring: false
+      });
+      allMeetings.push(inst);
+    }
+  }
+
+  hideAddModal();
   renderToday(); renderPast();
   selectMeeting(m.id);
 }
