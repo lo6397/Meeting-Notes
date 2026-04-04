@@ -1,75 +1,191 @@
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 import anthropic
-import os, json, uuid
+import os, json, uuid, shutil
 from datetime import datetime, date, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
+app.secret_key = os.environ.get('SECRET_KEY', 'change-me-in-production-' + uuid.uuid4().hex)
 app.permanent_session_lifetime = timedelta(hours=24)
 
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 
-AUTH_FILE = os.path.join(DATA_DIR, 'auth.json')
-DATA_FILE = os.path.join(DATA_DIR, 'meetings.json')
-EOD_FILE = os.path.join(DATA_DIR, 'eod_summaries.json')
-WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.json')
+USERS_FILE = os.path.join(DATA_DIR, 'users.json')
+INVITES_FILE = os.path.join(DATA_DIR, 'invites.json')
 
-# Migrate old root-level data files into DATA_DIR
-_app_root = os.path.dirname(os.path.abspath(__file__))
-for _fname in ['meetings.json', 'workspace.json', 'eod_summaries.json', 'auth.json']:
-    _old = os.path.join(_app_root, _fname)
-    _new = os.path.join(DATA_DIR, _fname)
-    if os.path.exists(_old) and not os.path.exists(_new):
-        import shutil
-        shutil.move(_old, _new)
-
-def get_password_hash():
-    env_pw = os.environ.get('APP_PASSWORD', '')
-    if env_pw:
-        return generate_password_hash(env_pw)
-    if os.path.exists(AUTH_FILE):
+# ---- User Management ----
+def load_users():
+    if os.path.exists(USERS_FILE):
         try:
-            with open(AUTH_FILE) as f:
-                return json.load(f).get('password_hash', '')
+            with open(USERS_FILE) as f:
+                return json.load(f).get('users', [])
         except Exception:
             pass
-    return ''
+    return []
 
-def save_password_hash(pw_hash):
+def save_users(users):
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(AUTH_FILE, 'w') as f:
-        json.dump({'password_hash': pw_hash}, f)
+    with open(USERS_FILE, 'w') as f:
+        json.dump({'users': users}, f, indent=2)
 
-def needs_setup():
-    return not get_password_hash()
+def find_user(email):
+    for u in load_users():
+        if u['email'].lower() == email.lower():
+            return u
+    return None
 
+def find_user_by_id(uid):
+    for u in load_users():
+        if u['id'] == uid:
+            return u
+    return None
+
+def user_data_dir(uid):
+    d = os.path.join(DATA_DIR, 'users', uid)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def current_user():
+    uid = session.get('user_id')
+    if uid:
+        return find_user_by_id(uid)
+    return None
+
+# ---- Invites ----
+def load_invites():
+    if os.path.exists(INVITES_FILE):
+        try:
+            with open(INVITES_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_invites(invites):
+    with open(INVITES_FILE, 'w') as f:
+        json.dump(invites, f, indent=2)
+
+# ---- Migrate existing data to owner account ----
+def migrate_existing_data():
+    admin_email = os.environ.get('ADMIN_EMAIL', 'admin@localhost')
+    admin_pw = os.environ.get('ADMIN_PASSWORD', os.environ.get('APP_PASSWORD', ''))
+    users = load_users()
+
+    # Check if owner already exists
+    owner = None
+    for u in users:
+        if u.get('role') == 'admin':
+            owner = u
+            break
+
+    if not owner and admin_pw:
+        owner = {
+            'id': uuid.uuid4().hex[:8],
+            'email': admin_email,
+            'passwordHash': generate_password_hash(admin_pw),
+            'name': 'Admin',
+            'role': 'admin',
+            'company': '',
+            'createdAt': datetime.now().isoformat(),
+            'lastLogin': None,
+            'onboardingComplete': False,
+            'plan': 'owner'
+        }
+        users.append(owner)
+        save_users(users)
+
+    if not owner:
+        return
+
+    # Move old data files into owner's directory
+    owner_dir = user_data_dir(owner['id'])
+    old_files = {
+        'meetings.json': os.path.join(DATA_DIR, 'meetings.json'),
+        'workspace.json': os.path.join(DATA_DIR, 'workspace.json'),
+        'eod_summaries.json': os.path.join(DATA_DIR, 'eod_summaries.json'),
+    }
+    # Also check app root
+    _app_root = os.path.dirname(os.path.abspath(__file__))
+    for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json']:
+        root_path = os.path.join(_app_root, fname)
+        if os.path.exists(root_path) and not os.path.exists(os.path.join(DATA_DIR, fname)):
+            shutil.move(root_path, os.path.join(DATA_DIR, fname))
+
+    for fname, old_path in old_files.items():
+        new_path = os.path.join(owner_dir, fname)
+        if os.path.exists(old_path) and not os.path.exists(new_path):
+            shutil.move(old_path, new_path)
+
+migrate_existing_data()
+
+# ---- Per-user data helpers ----
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if needs_setup():
-            return redirect(url_for('setup'))
-        if not session.get('authenticated'):
+        if not session.get('user_id'):
             if request.is_json or request.path.startswith('/api/'):
                 return jsonify({'error': 'Not authenticated'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
 
-def load_meetings():
-    if os.path.exists(DATA_FILE):
+def get_user_file(filename):
+    uid = session.get('user_id')
+    if not uid:
+        return None
+    return os.path.join(user_data_dir(uid), filename)
+
+def load_json_file(filepath):
+    if filepath and os.path.exists(filepath):
         try:
-            with open(DATA_FILE) as f:
+            with open(filepath) as f:
                 return json.load(f)
         except Exception:
             pass
     return []
 
+def save_json_file(filepath, data):
+    if filepath:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+
+def load_meetings():
+    return load_json_file(get_user_file('meetings.json'))
+
 def save_meetings(meetings):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(meetings, f, indent=2)
+    save_json_file(get_user_file('meetings.json'), meetings)
+
+def build_system_prompt():
+    base = "You are Aria, a helpful AI operations assistant. Be direct, actionable, and concise."
+    user = current_user()
+    if not user:
+        return base
+    ctx_file = os.path.join(user_data_dir(user['id']), 'context.json')
+    ctx = load_json_file(ctx_file)
+    if not ctx or isinstance(ctx, list):
+        return base
+    parts = [base]
+    if ctx.get('name'):
+        parts.append("You are assisting " + ctx['name'] + ('.' if not ctx.get('title') else ', ' + ctx['title'] + '.'))
+    if ctx.get('company'):
+        parts.append("Company: " + ctx['company'] + '.')
+    if ctx.get('department'):
+        parts.append("Department: " + ctx['department'] + '.')
+    if ctx.get('industry'):
+        parts.append("Industry: " + ctx['industry'] + '.')
+    if ctx.get('compliance'):
+        parts.append("Compliance: " + ', '.join(ctx['compliance']) + '.')
+    if ctx.get('priorities'):
+        parts.append("Current priorities: " + ', '.join(ctx['priorities']) + '.')
+    style = ctx.get('style', 'concise')
+    if style == 'detailed':
+        parts.append("Be thorough and detailed in responses.")
+    elif style == 'concise':
+        parts.append("Be concise and direct.")
+    return ' '.join(parts)
 
 def find_meeting(mid):
     meetings = load_meetings()
@@ -81,155 +197,369 @@ def find_meeting(mid):
 @app.route('/health')
 @login_required
 def health():
+    user = current_user()
     meetings = load_meetings()
     tasks = load_workspace()
     eods = load_eod()
-    last_mod = 0
-    for f in [DATA_FILE, WORKSPACE_FILE, EOD_FILE]:
-        if os.path.exists(f):
-            last_mod = max(last_mod, os.path.getmtime(f))
+    ud = user_data_dir(user['id']) if user else DATA_DIR
     files = {}
-    for name, path in [('meetings.json', DATA_FILE), ('workspace.json', WORKSPACE_FILE),
-                        ('eod_summaries.json', EOD_FILE), ('auth.json', AUTH_FILE)]:
-        files[name] = {'exists': os.path.exists(path), 'size': os.path.getsize(path) if os.path.exists(path) else 0}
+    for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json', 'context.json']:
+        fp = os.path.join(ud, fname)
+        files[fname] = {'exists': os.path.exists(fp), 'size': os.path.getsize(fp) if os.path.exists(fp) else 0}
     return jsonify({
         'status': 'ok',
-        'data_dir': DATA_DIR,
+        'data_dir': ud,
+        'user': user['email'] if user else None,
         'files': files,
         'meetings_count': len(meetings),
         'workspace_tasks': len(tasks),
         'workspace_incomplete': len([t for t in tasks if not t.get('completed')]),
         'eod_summaries': len(eods),
-        'last_updated': datetime.fromtimestamp(last_mod).isoformat() if last_mod else None
+        'total_users': len(load_users())
     })
 
 @app.route('/backup')
 @login_required
 def backup():
     import zipfile, io
+    user = current_user()
+    ud = user_data_dir(user['id']) if user else DATA_DIR
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json']:
-            fpath = os.path.join(DATA_DIR, fname)
+        for fname in ['meetings.json', 'workspace.json', 'eod_summaries.json', 'context.json']:
+            fpath = os.path.join(ud, fname)
             if os.path.exists(fpath):
                 zf.write(fpath, fname)
     buf.seek(0)
     from flask import send_file
     return send_file(buf, mimetype='application/zip',
                      as_attachment=True,
-                     download_name='meeting-recorder-backup-' + date.today().isoformat() + '.zip')
+                     download_name='aria-backup-' + date.today().isoformat() + '.zip')
 
-LOGIN_HTML = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign In - Aria</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.login-card{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:90vw;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}
-.logo{font-size:1.5rem;font-weight:700;color:#1a4fa3;margin-bottom:4px}
-.subtitle{color:#888;font-size:.9rem;margin-bottom:28px}
-label{display:block;text-align:left;font-weight:600;font-size:13px;margin-bottom:4px;color:#333}
-input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #ddd;border-radius:6px;margin-bottom:16px;box-sizing:border-box}
-.btn{width:100%;padding:12px;background:#1a4fa3;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer}
+AUTH_CSS = """*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}.login-card{background:#fff;border-radius:12px;padding:40px;width:400px;max-width:90vw;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}.logo{font-size:1.6rem;font-weight:700;color:#1a4fa3;margin-bottom:4px}.subtitle{color:#888;font-size:.9rem;margin-bottom:28px}label{display:block;text-align:left;font-weight:600;font-size:13px;margin-bottom:4px;color:#333;margin-top:12px}label:first-of-type{margin-top:0}input[type=text],input[type=email],input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #ddd;border-radius:6px;margin-bottom:8px;box-sizing:border-box}.btn{width:100%;padding:12px;background:#1a4fa3;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;margin-top:12px}.btn:hover{background:#153d80}.btn-green{background:#28a745}.btn-green:hover{background:#1e7e34}.error{color:#dc3535;font-size:13px;margin-bottom:12px}.link{font-size:12px;color:#888;margin-top:16px;display:block;cursor:pointer}.link:hover{color:#1a4fa3}"""
+
+LOGIN_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign In - Aria</title><style>' + AUTH_CSS + '</style></head><body><div class="login-card"><div class="logo">Aria</div><div class="subtitle">Your AI Operations Assistant</div>{% if error %}<div class="error">{{ error }}</div>{% endif %}<form method="POST"><label>Email</label><input type="email" name="email" placeholder="you@company.com" autofocus required value="{{ email or \'\' }}"><label>Password</label><input type="password" name="password" placeholder="Enter password" required><div style="text-align:left;margin:4px 0 8px"><label style="font-weight:400;font-size:12px;display:inline-flex;align-items:center;gap:4px;margin:0"><input type="checkbox" name="remember"> Remember me for 30 days</label></div><button class="btn" type="submit">Sign In</button></form><a class="link" href="/request-access">Request Access</a><a class="link" href="#" onclick="document.getElementById(\'ri\').style.display=\'block\';return false">Forgot password?</a><div id="ri" style="display:none;margin-top:8px;font-size:12px;color:#555;background:#f7fafc;padding:10px;border-radius:6px;text-align:left">Contact your admin or update <strong>ADMIN_PASSWORD</strong> in Railway.</div></div></body></html>'
+
+REGISTER_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Register - Aria</title><style>' + AUTH_CSS + '</style></head><body><div class="login-card"><div class="logo">Aria</div><div class="subtitle">Create Your Account</div>{% if error %}<div class="error">{{ error }}</div>{% endif %}<form method="POST"><label>Full Name</label><input type="text" name="name" placeholder="Your name" required><label>Email</label><input type="email" name="email" placeholder="you@company.com" required value="{{ email or \'\' }}"><label>Password</label><input type="password" name="password" placeholder="Choose a password" required minlength="4"><label>Confirm Password</label><input type="password" name="confirm" placeholder="Confirm password" required><button class="btn btn-green" type="submit">Create Account</button></form><a class="link" href="/login">Already have an account? Sign in</a></div></body></html>'
+
+REQUEST_ACCESS_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Request Access - Aria</title><style>' + AUTH_CSS + '</style></head><body><div class="login-card"><div class="logo">Aria</div><div class="subtitle">Request Access</div><p style="font-size:14px;color:#555;margin-bottom:20px">Aria is currently invite-only. Please contact your administrator to get an invite link.</p><a class="link" href="/login" style="font-size:14px">&larr; Back to Sign In</a></div></body></html>'
+
+ONBOARDING_HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Setup - Aria</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.ob-card{background:#fff;border-radius:12px;padding:36px;width:500px;max-width:95vw;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+.ob-card h2{color:#1a4fa3;margin-bottom:4px;font-size:1.2rem}
+.ob-card .step-info{color:#888;font-size:13px;margin-bottom:20px}
+label{display:block;font-weight:600;font-size:13px;margin:12px 0 4px;color:#333}
+input[type=text],select,textarea{width:100%;padding:9px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit;box-sizing:border-box}
+textarea{height:60px;resize:vertical}
+.cb-group{margin:8px 0}
+.cb-group label{font-weight:400;font-size:14px;display:flex;align-items:center;gap:6px;margin:4px 0}
+.btn{padding:12px 24px;background:#1a4fa3;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;margin-top:16px}
 .btn:hover{background:#153d80}
-.error{color:#dc3535;font-size:13px;margin-bottom:12px}
-.reset-link{font-size:12px;color:#888;margin-top:16px;display:block}
-.reset-link:hover{color:#1a4fa3}
+.btn-green{background:#28a745}.btn-green:hover{background:#1e7e34}
+.preview{background:#f7fafc;border-radius:8px;padding:16px;font-size:14px;margin:12px 0;line-height:1.5}
 </style></head><body>
-<div class="login-card">
-<div class="logo">Aria</div>
-<div class="subtitle">Your AI Operations Assistant</div>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="POST">
-<label>Password</label>
-<input type="password" name="password" placeholder="Enter password" autofocus required>
-<button class="btn" type="submit">Sign In</button>
-</form>
-<a class="reset-link" href="#" onclick="document.getElementById('reset-info').style.display='block';return false">Forgot password?</a>
-<div id="reset-info" style="display:none;margin-top:12px;font-size:12px;color:#555;background:#f7fafc;padding:10px;border-radius:6px;text-align:left">
-To reset your password, update the <strong>APP_PASSWORD</strong> environment variable in Railway and redeploy.</div>
-</div></body></html>
-"""
-
-SETUP_HTML = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Setup - Aria</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.login-card{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:90vw;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}
-.logo{font-size:1.5rem;font-weight:700;color:#1a4fa3;margin-bottom:4px}
-.subtitle{color:#888;font-size:.9rem;margin-bottom:28px}
-label{display:block;text-align:left;font-weight:600;font-size:13px;margin-bottom:4px;color:#333;margin-top:12px}
-label:first-of-type{margin-top:0}
-input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #ddd;border-radius:6px;margin-bottom:4px;box-sizing:border-box}
-.btn{width:100%;padding:12px;background:#28a745;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;margin-top:16px}
-.btn:hover{background:#1e7e34}
-.error{color:#dc3535;font-size:13px;margin-bottom:12px}
-</style></head><body>
-<div class="login-card">
-<div class="logo">Aria</div>
-<div class="subtitle">Create Your Password</div>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="POST">
-<label>New Password</label>
-<input type="password" name="password" placeholder="Choose a password" required minlength="4">
-<label>Confirm Password</label>
-<input type="password" name="confirm" placeholder="Confirm password" required>
-<button class="btn" type="submit">Create Password &amp; Sign In</button>
-</form>
-</div></body></html>
-"""
+<div class="ob-card">
+<div id="step1">
+<h2>Welcome to Aria!</h2>
+<p class="step-info">Step 1 of 5 — Let's get to know you</p>
+<label>Your Name</label><input type="text" id="ob-name" value="{{ name }}">
+<label>Job Title</label><input type="text" id="ob-title" placeholder="e.g. COO, Operations Manager">
+<label>Company Name</label><input type="text" id="ob-company" value="{{ company }}">
+<button class="btn" onclick="goStep(2)">Next &rarr;</button>
+</div>
+<div id="step2" style="display:none">
+<h2>Your Role</h2>
+<p class="step-info">Step 2 of 5 — Help us understand your work</p>
+<label>Department</label>
+<select id="ob-dept"><option>COO/Operations</option><option>Clinical</option><option>HR</option><option>Finance</option><option>Business Development</option><option>Other</option></select>
+<label>Top 3 priorities right now</label>
+<input type="text" id="ob-p1" placeholder="Priority 1" style="margin-bottom:4px">
+<input type="text" id="ob-p2" placeholder="Priority 2" style="margin-bottom:4px">
+<input type="text" id="ob-p3" placeholder="Priority 3">
+<label>Team size</label>
+<select id="ob-team"><option>1-10</option><option>11-50</option><option>51-200</option><option>200+</option></select>
+<button class="btn" onclick="goStep(3)">Next &rarr;</button>
+</div>
+<div id="step3" style="display:none">
+<h2>Your Industry</h2>
+<p class="step-info">Step 3 of 5 — Industry context</p>
+<label>Industry</label>
+<select id="ob-industry"><option>Healthcare</option><option>Home Health</option><option>SNF</option><option>Hospital</option><option>Technology</option><option>Finance</option><option>Other</option></select>
+<label>Compliance Requirements</label>
+<div class="cb-group">
+<label><input type="checkbox" id="ob-hipaa"> HIPAA</label>
+<label><input type="checkbox" id="ob-license"> State Licensing</label>
+<label><input type="checkbox" id="ob-other-comp"> Other</label>
+</div>
+<button class="btn" onclick="goStep(4)">Next &rarr;</button>
+</div>
+<div id="step4" style="display:none">
+<h2>AI Preferences</h2>
+<p class="step-info">Step 4 of 5 — How should Aria work for you?</p>
+<label>Communication style</label>
+<select id="ob-style"><option value="concise">Direct and concise</option><option value="detailed">Detailed and thorough</option><option value="mixed">Mix of both</option></select>
+<label>What will you use Aria for?</label>
+<div class="cb-group">
+<label><input type="checkbox" id="ob-use-meetings" checked> Meeting summaries</label>
+<label><input type="checkbox" id="ob-use-tasks" checked> Task management</label>
+<label><input type="checkbox" id="ob-use-strategy"> Strategic planning</label>
+<label><input type="checkbox" id="ob-use-comms"> Team communication</label>
+<label><input type="checkbox" id="ob-use-clients"> Client management</label>
+</div>
+<button class="btn" onclick="goStep(5)">Next &rarr;</button>
+</div>
+<div id="step5" style="display:none">
+<h2>You're All Set!</h2>
+<p class="step-info">Step 5 of 5 — Your personalized assistant</p>
+<div class="preview" id="ob-preview"></div>
+<button class="btn btn-green" onclick="saveOnboarding()">Start Using Aria &rarr;</button>
+</div>
+</div>
+<script>
+function goStep(n) {
+  for(var i=1;i<=5;i++) document.getElementById('step'+i).style.display='none';
+  document.getElementById('step'+n).style.display='';
+  if(n===5) buildPreview();
+}
+function buildPreview() {
+  var name=document.getElementById('ob-name').value||'there';
+  var co=document.getElementById('ob-company').value;
+  var dept=document.getElementById('ob-dept').value;
+  document.getElementById('ob-preview').innerHTML='Aria is configured for <strong>'+name+'</strong>'+(co?' at <strong>'+co+'</strong>':'')+' ('+dept+').<br><br>Style: '+document.getElementById('ob-style').value+'<br>Ready to help with meetings, tasks, and operations.';
+}
+function saveOnboarding() {
+  var data={
+    name:document.getElementById('ob-name').value,
+    title:document.getElementById('ob-title').value,
+    company:document.getElementById('ob-company').value,
+    department:document.getElementById('ob-dept').value,
+    priorities:[document.getElementById('ob-p1').value,document.getElementById('ob-p2').value,document.getElementById('ob-p3').value].filter(Boolean),
+    teamSize:document.getElementById('ob-team').value,
+    industry:document.getElementById('ob-industry').value,
+    compliance:[],
+    style:document.getElementById('ob-style').value,
+    useCases:[]
+  };
+  if(document.getElementById('ob-hipaa').checked) data.compliance.push('HIPAA');
+  if(document.getElementById('ob-license').checked) data.compliance.push('State Licensing');
+  ['meetings','tasks','strategy','comms','clients'].forEach(function(u){
+    if(document.getElementById('ob-use-'+u).checked) data.useCases.push(u);
+  });
+  fetch('/api/onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(){window.location='/';});
+}
+</script>
+</body></html>"""
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if needs_setup():
-        return redirect(url_for('setup'))
+    users = load_users()
+    if not users:
+        # No users at all — auto-create admin from env vars
+        admin_email = os.environ.get('ADMIN_EMAIL', '')
+        admin_pw = os.environ.get('ADMIN_PASSWORD', '')
+        if admin_email and admin_pw:
+            migrate_existing_data()
+            return redirect(url_for('login'))
+        return redirect(url_for('register'))
     error = ''
+    email = ''
     if request.method == 'POST':
+        email = request.form.get('email', '').strip()
         pw = request.form.get('password', '')
-        pw_hash = get_password_hash()
-        # Check against env var directly or stored hash
-        env_pw = os.environ.get('APP_PASSWORD', '')
-        if env_pw and pw == env_pw:
+        remember = request.form.get('remember')
+        user = find_user(email)
+        if user and check_password_hash(user['passwordHash'], pw):
             session.permanent = True
-            session['authenticated'] = True
-            return redirect(url_for('index'))
-        elif pw_hash and check_password_hash(pw_hash, pw):
-            session.permanent = True
-            session['authenticated'] = True
+            if remember:
+                app.permanent_session_lifetime = timedelta(days=30)
+            else:
+                app.permanent_session_lifetime = timedelta(hours=24)
+            session['user_id'] = user['id']
+            # Update last login
+            users = load_users()
+            for u in users:
+                if u['id'] == user['id']:
+                    u['lastLogin'] = datetime.now().isoformat()
+            save_users(users)
+            if not user.get('onboardingComplete'):
+                return redirect(url_for('onboarding'))
             return redirect(url_for('index'))
         else:
-            error = 'Invalid password'
-    return render_template_string(LOGIN_HTML, error=error)
+            error = 'Invalid email or password'
+    return render_template_string(LOGIN_HTML, error=error, email=email)
 
-@app.route('/setup', methods=['GET', 'POST'])
-def setup():
-    if not needs_setup():
-        return redirect(url_for('login'))
+@app.route('/register', methods=['GET', 'POST'])
+def register():
     error = ''
+    email = ''
+    # Only allow registration if no users exist or user has a valid invite token
+    token = request.args.get('token', '')
+    users = load_users()
+    invite = None
+    if token:
+        invites = load_invites()
+        for inv in invites:
+            if inv['token'] == token and not inv.get('used') and inv.get('expiresAt', '9999') > datetime.now().isoformat():
+                invite = inv
+                email = inv.get('email', '')
+                break
+        if not invite:
+            return render_template_string(REQUEST_ACCESS_HTML)
+    elif users:
+        return render_template_string(REQUEST_ACCESS_HTML)
     if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        email = request.form.get('email', '').strip()
         pw = request.form.get('password', '')
         confirm = request.form.get('confirm', '')
-        if len(pw) < 4:
+        if not name or not email:
+            error = 'Name and email are required'
+        elif find_user(email):
+            error = 'An account with this email already exists'
+        elif len(pw) < 4:
             error = 'Password must be at least 4 characters'
         elif pw != confirm:
             error = 'Passwords do not match'
         else:
-            save_password_hash(generate_password_hash(pw))
+            user = {
+                'id': uuid.uuid4().hex[:8],
+                'email': email,
+                'passwordHash': generate_password_hash(pw),
+                'name': name,
+                'role': 'admin' if not users else 'user',
+                'company': '',
+                'createdAt': datetime.now().isoformat(),
+                'lastLogin': datetime.now().isoformat(),
+                'onboardingComplete': False,
+                'plan': 'owner' if not users else 'team'
+            }
+            users.append(user)
+            save_users(users)
+            if invite:
+                invites = load_invites()
+                for inv in invites:
+                    if inv['token'] == token:
+                        inv['used'] = True
+                save_invites(invites)
             session.permanent = True
-            session['authenticated'] = True
-            return redirect(url_for('index'))
-    return render_template_string(SETUP_HTML, error=error)
+            session['user_id'] = user['id']
+            return redirect(url_for('onboarding'))
+    return render_template_string(REGISTER_HTML, error=error, email=email)
+
+@app.route('/request-access')
+def request_access():
+    return render_template_string(REQUEST_ACCESS_HTML)
+
+@app.route('/onboarding')
+@login_required
+def onboarding():
+    user = current_user()
+    if not user:
+        return redirect(url_for('login'))
+    if user.get('onboardingComplete'):
+        return redirect(url_for('index'))
+    return render_template_string(ONBOARDING_HTML, name=user.get('name',''), company=user.get('company',''))
+
+@app.route('/api/onboarding', methods=['POST'])
+@login_required
+def api_onboarding():
+    user = current_user()
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json
+    # Save context
+    ctx = {
+        'name': d.get('name', ''),
+        'title': d.get('title', ''),
+        'company': d.get('company', ''),
+        'department': d.get('department', ''),
+        'priorities': d.get('priorities', []),
+        'teamSize': d.get('teamSize', ''),
+        'industry': d.get('industry', ''),
+        'compliance': d.get('compliance', []),
+        'style': d.get('style', 'concise'),
+        'useCases': d.get('useCases', []),
+        'updatedAt': datetime.now().isoformat()
+    }
+    save_json_file(os.path.join(user_data_dir(user['id']), 'context.json'), ctx)
+    # Mark onboarding complete
+    users = load_users()
+    for u in users:
+        if u['id'] == user['id']:
+            u['onboardingComplete'] = True
+            u['name'] = d.get('name', u.get('name', ''))
+            u['company'] = d.get('company', u.get('company', ''))
+    save_users(users)
+    return jsonify({'ok': True})
+
+@app.route('/invite/<token>')
+def invite_page(token):
+    return redirect(url_for('register', token=token))
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
 
+# ---- Admin API ----
+@app.route('/api/admin/users')
+@login_required
+def api_admin_users():
+    user = current_user()
+    if not user or user.get('role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    users = load_users()
+    safe = []
+    for u in users:
+        safe.append({k: u[k] for k in ['id','email','name','role','company','createdAt','lastLogin','onboardingComplete','plan'] if k in u})
+    return jsonify(safe)
+
+@app.route('/api/admin/invite', methods=['POST'])
+@login_required
+def api_admin_invite():
+    user = current_user()
+    if not user or user.get('role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    d = request.json
+    email = d.get('email', '').strip()
+    if not email:
+        return jsonify({'error': 'Email required'}), 400
+    token = uuid.uuid4().hex
+    invite = {
+        'token': token,
+        'email': email,
+        'createdBy': user['id'],
+        'createdAt': datetime.now().isoformat(),
+        'expiresAt': (datetime.now() + timedelta(days=7)).isoformat(),
+        'used': False
+    }
+    invites = load_invites()
+    invites.append(invite)
+    save_invites(invites)
+    return jsonify({'token': token, 'link': '/invite/' + token})
+
+@app.route('/api/admin/deactivate', methods=['POST'])
+@login_required
+def api_admin_deactivate():
+    user = current_user()
+    if not user or user.get('role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    d = request.json
+    uid = d.get('userId')
+    if uid == user['id']:
+        return jsonify({'error': 'Cannot deactivate yourself'}), 400
+    users = load_users()
+    users = [u for u in users if u['id'] != uid]
+    save_users(users)
+    return jsonify({'ok': True})
+
 @app.route('/')
 @login_required
 def index():
+    user = current_user()
+    if user and not user.get('onboardingComplete'):
+        return redirect(url_for('onboarding'))
     return render_template_string(HTML)
 
 @app.route('/api/meetings')
@@ -286,17 +616,10 @@ def api_delete(mid):
     return jsonify({'ok': True})
 
 def load_eod():
-    if os.path.exists(EOD_FILE):
-        try:
-            with open(EOD_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    return load_json_file(get_user_file('eod_summaries.json'))
 
 def save_eod(summaries):
-    with open(EOD_FILE, 'w') as f:
-        json.dump(summaries, f, indent=2)
+    save_json_file(get_user_file('eod_summaries.json'), summaries)
 
 @app.route('/api/eod', methods=['GET'])
 @login_required
@@ -330,17 +653,10 @@ def api_eod_delete(eid):
     return jsonify({'ok': True})
 
 def load_workspace():
-    if os.path.exists(WORKSPACE_FILE):
-        try:
-            with open(WORKSPACE_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    return load_json_file(get_user_file('workspace.json'))
 
 def save_workspace(tasks):
-    with open(WORKSPACE_FILE, 'w') as f:
-        json.dump(tasks, f, indent=2)
+    save_json_file(get_user_file('workspace.json'), tasks)
 
 @app.route('/api/workspace', methods=['GET'])
 @login_required
@@ -563,7 +879,7 @@ def api_chat():
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,
-            system="You are Aria, a helpful AI operations assistant. Be direct, actionable, and concise. Help with meetings, tasks, scheduling, and workflow optimization.",
+            system=build_system_prompt(),
             messages=messages
         )
         return jsonify({'text': resp.content[0].text})
