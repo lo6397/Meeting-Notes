@@ -459,6 +459,14 @@ header h1{font-size:1.5rem}
 .badge-scheduled{background:#e9ecef;color:#666}
 .badge-recording{background:#dc3535;color:#fff;animation:pulse 1.2s infinite}
 .badge-completed{background:#28a745;color:#fff}
+.completed-section{margin-top:16px;padding-top:12px;border-top:1px solid #eee}
+.completed-section h4{font-size:.85rem;color:#555;margin-bottom:8px}
+.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.dot-red{background:#dc3535}
+.dot-yellow{background:#f59e0b}
+.dot-green{background:#28a745}
+.completed-card{background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;font-size:13px}
+.completed-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 .card-actions{margin-top:8px;display:flex;gap:6px}
 .btn{padding:6px 14px;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
@@ -783,8 +791,8 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
           <div id="promptsList"></div>
         </div>
         <div class="result-actions">
-          <button class="btn btn-start" onclick="saveMeetingAndWrapup(false)" style="padding:10px 20px">Save Meeting</button>
-          <button class="btn btn-outline" onclick="saveMeetingAndWrapup(true)">Download &amp; Save</button>
+          <button class="btn btn-start" onclick="saveMeetingAndWrapup()" style="padding:10px 20px">Save Meeting</button>
+          <button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>
           <button class="btn" onclick="discardMeeting()" style="background:none;color:#dc3535;border:1px solid #dc3535">Discard</button>
         </div>
       </div>
@@ -1069,19 +1077,22 @@ function renderToday() {
     + '<button class="btn btn-sm" onclick="navDate(1)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-left:6px;font-size:14px;cursor:pointer">&rarr;</button>'
     + (!isToday ? ' <button class="btn btn-sm btn-blue" onclick="navToday()" style="padding:2px 8px;margin-left:6px;font-size:11px">Today</button>' : '')
     + ' <span class="view-toggle"><button class="'+(calView==='day'?'active':'')+'" onclick="setCalView(\'day\')">Day</button><button class="'+(calView==='week'?'active':'')+'" onclick="setCalView(\'week\')">Week</button></span>';
-  var list = allMeetings.filter(function(m) { return m.scheduledDate === viewingDate; });
-  list.sort(function(a,b) { return (a.scheduledTime||'').localeCompare(b.scheduledTime||''); });
+  var all = allMeetings.filter(function(m) { return m.scheduledDate === viewingDate; });
+  var scheduled = all.filter(function(m){return m.status !== 'completed';});
+  var completed = all.filter(function(m){return m.status === 'completed';});
+  scheduled.sort(function(a,b) { return (a.scheduledTime||'').localeCompare(b.scheduledTime||''); });
+  completed.sort(function(a,b) { return (a.scheduledTime||'').localeCompare(b.scheduledTime||''); });
   var el = document.getElementById('todayList');
-  if (!list.length) { el.innerHTML = '<div class="empty">No meetings scheduled for ' + formatDate(viewingDate) + '.</div>'; return; }
+  if (!all.length) { el.innerHTML = '<div class="empty">No meetings scheduled for ' + formatDate(viewingDate) + '.</div>'; return; }
   var html = '';
-  list.forEach(function(m) {
+  // Scheduled meetings
+  scheduled.forEach(function(m) {
     var cls = 'today-card status-' + m.status;
     if (m.id === activeMeetingId) cls += ' active';
     html += '<div class="' + cls + '" onclick="selectMeeting(\'' + m.id + '\')">';
     html += '<h4>' + escHtml(m.title);
     if (m.status === 'scheduled') html += ' <span class="badge badge-scheduled">Scheduled</span>';
     else if (m.status === 'recording') html += ' <span class="badge badge-recording">Recording</span>';
-    else if (m.status === 'completed') html += ' <span class="badge badge-completed">Completed</span>';
     if (m.isRecurring || m.recurringParentId) {
       var freq = m.recurringFrequency || 'weekly';
       html += ' <span class="badge badge-scheduled" style="background:#e0e7ff;color:#3730a3">&#128257; ' + freq.charAt(0).toUpperCase()+freq.slice(1) + '</span>';
@@ -1095,7 +1106,39 @@ function renderToday() {
     if (m.status === 'scheduled') html += '<div style="margin-top:6px"><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();draftAgenda(\'' + m.id + '\')">&#128196; Draft Agenda</button></div>';
     html += '</div>';
   });
+  if (!scheduled.length) html += '<div class="empty" style="padding:10px;font-size:13px">No upcoming meetings.</div>';
+  // Completed section
+  if (completed.length) {
+    html += '<div class="completed-section"><h4>&#10003; Completed Today (' + completed.length + ')</h4>';
+    completed.forEach(function(m) {
+      var dot = getMeetingStatusDot(m);
+      html += '<div class="completed-card" onclick="selectMeeting(\'' + m.id + '\')">';
+      html += '<span class="status-dot dot-' + dot + '"></span>';
+      html += '<strong>' + escHtml(m.title) + '</strong>';
+      html += ' <span style="font-size:12px;color:#888">' + formatTime(m.scheduledTime) + '</span>';
+      if (m.isRecurring || m.recurringParentId) html += ' &#128257;';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
   el.innerHTML = html;
+}
+
+function getMeetingStatusDot(m) {
+  // Check action items for this meeting in workspace
+  var actions = m.actions || [];
+  if (!actions.length) return 'green';
+  var inWorkspace = allTasks.filter(function(t){return t.meetingId === m.id;});
+  // If some actions have no corresponding workspace task, they're untriaged
+  var untriaged = 0;
+  actions.forEach(function(a) {
+    var found = inWorkspace.find(function(t){return t.text === a;});
+    if (!found) untriaged++;
+  });
+  if (untriaged > 0) return 'red';
+  // All triaged — check if all completed
+  var allDone = inWorkspace.every(function(t){return t.completed;});
+  return allDone ? 'green' : 'yellow';
 }
 
 function setCalView(v) { calView = v; renderToday(); }
@@ -2447,20 +2490,14 @@ function showWrapup() {
 }
 function hideWrapup() { document.getElementById('wrapupModal').classList.remove('show'); }
 
-var _pendingDownload = false;
-
-async function saveMeetingAndWrapup(withDownload) {
-  _pendingDownload = withDownload;
+async function saveMeetingAndWrapup() {
   var m = _showResultsMeeting || allMeetings.find(function(x){return x.id===activeMeetingId;});
   if (!m) return;
-  // Ensure saved as completed
   if (m.status !== 'completed') {
     await apiUpdate(m.id, { status:'completed', completedAt:new Date().toISOString() });
     m.status = 'completed'; m.completedAt = new Date().toISOString();
   }
   renderToday();
-  if (withDownload) downloadPkg(m.id);
-  // If there are action items, show triage; otherwise go home
   if (m.actions && m.actions.length) {
     showWrapup();
   } else {
