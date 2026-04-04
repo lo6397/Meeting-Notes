@@ -783,9 +783,9 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
           <div id="promptsList"></div>
         </div>
         <div class="result-actions">
-          <button class="eod-btn" onclick="showWrapup()">Wrap Up Meeting</button>
-          <button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>
-          <button class="btn btn-start" onclick="clearRight()">New Meeting</button>
+          <button class="btn btn-start" onclick="saveMeetingAndWrapup(false)" style="padding:10px 20px">Save Meeting</button>
+          <button class="btn btn-outline" onclick="saveMeetingAndWrapup(true)">Download &amp; Save</button>
+          <button class="btn" onclick="discardMeeting()" style="background:none;color:#dc3535;border:1px solid #dc3535">Discard</button>
         </div>
       </div>
     </div>
@@ -857,8 +857,9 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 <div class="modal" style="width:560px">
   <h2>Wrap Up Meeting</h2>
   <p style="font-size:13px;color:#888;margin-bottom:12px">Where does each action item go?</p>
-  <div class="wrapup-triage-all">
-    <button class="btn btn-gray" onclick="wrapupTriageAll()" style="width:100%;padding:10px;font-size:14px">&#9208;&#65039; Triage Later — save all and sort when ready</button>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn btn-blue" onclick="wrapupSkip()" style="flex:1;padding:10px;font-size:13px">Skip for Now — go home</button>
+    <button class="btn btn-gray" onclick="wrapupTriageAll()" style="flex:1;padding:10px;font-size:13px">&#9208; Triage All Later</button>
   </div>
   <div id="wrapupItems"></div>
   <div class="modal-actions">
@@ -2446,6 +2447,51 @@ function showWrapup() {
 }
 function hideWrapup() { document.getElementById('wrapupModal').classList.remove('show'); }
 
+var _pendingDownload = false;
+
+async function saveMeetingAndWrapup(withDownload) {
+  _pendingDownload = withDownload;
+  var m = _showResultsMeeting || allMeetings.find(function(x){return x.id===activeMeetingId;});
+  if (!m) return;
+  // Ensure saved as completed
+  if (m.status !== 'completed') {
+    await apiUpdate(m.id, { status:'completed', completedAt:new Date().toISOString() });
+    m.status = 'completed'; m.completedAt = new Date().toISOString();
+  }
+  renderToday();
+  if (withDownload) downloadPkg(m.id);
+  // If there are action items, show triage; otherwise go home
+  if (m.actions && m.actions.length) {
+    showWrapup();
+  } else {
+    goHome();
+  }
+}
+
+function wrapupSkip() {
+  hideWrapup();
+  goHome();
+}
+
+function goHome() {
+  activeMeetingId = null;
+  _showResultsMeeting = null;
+  document.getElementById('noSelection').style.display = '';
+  document.getElementById('activeArea').style.display = 'none';
+  document.getElementById('resultArea').style.display = '';
+  document.getElementById('resultArea').style.display = 'none';
+  renderToday(); renderPast();
+}
+
+async function discardMeeting() {
+  if (!confirm('Are you sure? This will permanently delete this meeting and cannot be undone.')) return;
+  var mid = activeMeetingId;
+  if (!mid) return;
+  await fetch('/api/meetings/' + mid, { method:'DELETE' });
+  allMeetings = allMeetings.filter(function(m){return m.id !== mid;});
+  goHome();
+}
+
 async function wrapupAddItem(idx, zone) {
   var m = window._wrapupMeeting;
   if (!m) return;
@@ -2457,6 +2503,7 @@ async function wrapupAddItem(idx, zone) {
   await loadWorkspace();
   var el = document.getElementById('wrapup-'+idx);
   if (el) el.innerHTML = '<div class="wrapup-text">' + escHtml(a) + ' <span class="action-add-btn added" style="cursor:default">\u2713 Added to ' + zone + '</span></div>';
+  checkWrapupDone();
 }
 
 async function wrapupAddWaiting(idx) {
@@ -2472,6 +2519,15 @@ async function wrapupAddWaiting(idx) {
   await loadWorkspace();
   var el = document.getElementById('wrapup-'+idx);
   if (el) el.innerHTML = '<div class="wrapup-text">' + escHtml(a) + ' <span class="action-add-btn added" style="cursor:default">\u2713 Waiting on ' + escHtml(who) + '</span></div>';
+  checkWrapupDone();
+}
+
+function checkWrapupDone() {
+  // If all wrapup items have been triaged, auto-close and go home
+  var remaining = document.querySelectorAll('#wrapupItems .wrapup-zone-btns');
+  if (remaining.length === 0) {
+    setTimeout(function() { hideWrapup(); goHome(); updateTriageBadge(); }, 500);
+  }
 }
 
 async function wrapupTriageAll() {
@@ -2489,6 +2545,7 @@ async function wrapupTriageAll() {
   await loadWorkspace();
   hideWrapup();
   updateTriageBadge();
+  goHome();
 }
 
 // --- Quick Capture ---
