@@ -1,3 +1,6 @@
 flask
 anthropic
 werkzeug
+pdfplumber
+openpyxl
+python-docx

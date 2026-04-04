@@ -916,6 +916,167 @@ Please create:
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ---- Documents ----
+ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'xls', 'csv', 'docx', 'txt'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+def load_documents():
+    return load_json_file(get_user_file('documents.json'))
+
+def save_documents(docs):
+    save_json_file(get_user_file('documents.json'), docs)
+
+def extract_text(filepath, ext):
+    text = ''
+    try:
+        if ext == 'pdf':
+            import pdfplumber
+            with pdfplumber.open(filepath) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t: text += t + '\n'
+        elif ext in ('xlsx', 'xls'):
+            import openpyxl
+            wb = openpyxl.load_workbook(filepath, data_only=True)
+            for ws in wb.worksheets:
+                for row in ws.iter_rows(values_only=True):
+                    text += '\t'.join([str(c) if c is not None else '' for c in row]) + '\n'
+        elif ext == 'csv':
+            import csv
+            with open(filepath, newline='', errors='ignore') as f:
+                for row in csv.reader(f):
+                    text += '\t'.join(row) + '\n'
+        elif ext == 'docx':
+            from docx import Document as DocxDoc
+            doc = DocxDoc(filepath)
+            for p in doc.paragraphs:
+                text += p.text + '\n'
+        elif ext == 'txt':
+            with open(filepath, errors='ignore') as f:
+                text = f.read()
+    except Exception as e:
+        text = f'[Error extracting text: {e}]'
+    return text[:50000]  # Limit to 50k chars
+
+@app.route('/api/documents', methods=['GET'])
+@login_required
+def api_docs_list():
+    return jsonify(load_documents())
+
+@app.route('/api/documents/upload', methods=['POST'])
+@login_required
+def api_docs_upload():
+    user = current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'No file selected'}), 400
+    ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({'error': f'File type .{ext} not allowed. Use: pdf, xlsx, csv, docx, txt'}), 400
+
+    # Save file
+    doc_dir = os.path.join(user_data_dir(user['id']), 'documents')
+    os.makedirs(doc_dir, exist_ok=True)
+    doc_id = uuid.uuid4().hex[:8]
+    safe_name = doc_id + '.' + ext
+    filepath = os.path.join(doc_dir, safe_name)
+    f.save(filepath)
+
+    fsize = os.path.getsize(filepath)
+    if fsize > MAX_FILE_SIZE:
+        os.remove(filepath)
+        return jsonify({'error': 'File too large. Max 10MB.'}), 400
+
+    # Extract text
+    text = extract_text(filepath, ext)
+
+    doc = {
+        'id': doc_id,
+        'filename': safe_name,
+        'originalName': f.filename,
+        'type': 'other',
+        'uploadedAt': datetime.now().isoformat(),
+        'size': fsize,
+        'summary': '',
+        'keyPoints': [],
+        'actionItems': [],
+        'tags': [],
+        'relatedMeetings': [],
+        'textPreview': text[:500]
+    }
+
+    # Auto-analyze with Claude
+    api_key = request.form.get('api_key') or os.environ.get('ANTHROPIC_API_KEY', '')
+    if api_key and text.strip():
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001", max_tokens=1024,
+                messages=[{'role': 'user', 'content': f'Analyze this document and return ONLY valid JSON:\n{{"type":"contract"|"spreadsheet"|"report"|"other","summary":"one paragraph","keyPoints":["point1","point2"],"actionItems":["item1"],"suggestedTags":["tag1"]}}\n\nDocument: {f.filename}\n\nContent:\n{text[:8000]}'}]
+            )
+            rtext = resp.content[0].text.strip()
+            if rtext.startswith('```'): rtext = rtext.split('\n',1)[1] if '\n' in rtext else rtext[3:]
+            if rtext.endswith('```'): rtext = rtext[:-3]
+            analysis = json.loads(rtext.strip())
+            doc['type'] = analysis.get('type', 'other')
+            doc['summary'] = analysis.get('summary', '')
+            doc['keyPoints'] = analysis.get('keyPoints', [])
+            doc['actionItems'] = analysis.get('actionItems', [])
+            doc['tags'] = analysis.get('suggestedTags', [])
+        except Exception:
+            pass
+
+    docs = load_documents()
+    docs.append(doc)
+    save_documents(docs)
+    return jsonify(doc)
+
+@app.route('/api/documents/<did>', methods=['GET'])
+@login_required
+def api_doc_get(did):
+    user = current_user()
+    docs = load_documents()
+    doc = next((d for d in docs if d['id'] == did), None)
+    if not doc:
+        return jsonify({'error': 'Not found'}), 404
+    # Read full text
+    filepath = os.path.join(user_data_dir(user['id']), 'documents', doc['filename'])
+    ext = doc['filename'].rsplit('.', 1)[-1].lower()
+    text = extract_text(filepath, ext) if os.path.exists(filepath) else ''
+    return jsonify({**doc, 'fullText': text})
+
+@app.route('/api/documents/<did>', methods=['DELETE'])
+@login_required
+def api_doc_delete(did):
+    user = current_user()
+    docs = load_documents()
+    doc = next((d for d in docs if d['id'] == did), None)
+    if doc:
+        filepath = os.path.join(user_data_dir(user['id']), 'documents', doc['filename'])
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    docs = [d for d in docs if d['id'] != did]
+    save_documents(docs)
+    return jsonify({'ok': True})
+
+@app.route('/api/documents/<did>/download')
+@login_required
+def api_doc_download(did):
+    user = current_user()
+    docs = load_documents()
+    doc = next((d for d in docs if d['id'] == did), None)
+    if not doc:
+        return jsonify({'error': 'Not found'}), 404
+    filepath = os.path.join(user_data_dir(user['id']), 'documents', doc['filename'])
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'File not found'}), 404
+    from flask import send_file
+    return send_file(filepath, as_attachment=True, download_name=doc['originalName'])
+
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def api_chat():
@@ -1150,6 +1311,27 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .zm-backlog{background:#e2e8f0;color:#718096}
 .waiting-info{font-size:12px;color:#975a16;display:flex;align-items:center;gap:4px}
 .waiting-input{font-size:12px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;width:120px}
+/* Documents */
+.docs-upload{border:2px dashed #ddd;border-radius:10px;padding:24px;text-align:center;margin-bottom:16px;cursor:pointer;transition:all .2s}
+.docs-upload:hover{border-color:#1a4fa3;background:#f5f8ff}
+.docs-upload input{display:none}
+.docs-upload .upload-icon{font-size:32px;margin-bottom:8px}
+.docs-upload p{color:#888;font-size:13px}
+.docs-filters{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.doc-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;gap:12px;align-items:flex-start}
+.doc-icon{font-size:28px;flex-shrink:0;width:36px;text-align:center}
+.doc-body{flex:1;min-width:0}
+.doc-body h4{font-size:.9rem;margin-bottom:2px;word-break:break-word}
+.doc-meta{font-size:12px;color:#888;display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.doc-summary{font-size:13px;color:#555;margin-bottom:6px}
+.doc-tags{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.doc-tag{font-size:11px;padding:2px 8px;border-radius:10px;background:#e9ecef;color:#555;font-weight:600}
+.doc-points{font-size:13px;margin:6px 0}
+.doc-points li{margin-bottom:2px}
+.doc-actions{display:flex;gap:6px;flex-shrink:0;align-items:flex-start;flex-wrap:wrap}
+.doc-questions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.doc-questions button{font-size:11px;padding:4px 10px;border:1px solid #ddd;border-radius:12px;background:#fff;cursor:pointer;color:#555}
+.doc-questions button:hover{border-color:#1a4fa3;color:#1a4fa3;background:#f5f8ff}
 /* Assistant Mode */
 .assist-bar{position:fixed;bottom:0;left:0;right:0;background:#1a1a2e;color:#fff;padding:12px 20px;z-index:95;display:none;align-items:center;gap:12px;font-size:14px;box-shadow:0 -2px 12px rgba(0,0,0,.2)}
 .assist-bar.show{display:flex}
@@ -1364,6 +1546,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <button class="app-tab" onclick="switchAppTab('workspace')">&#9745; Workspace <span id="triageBadge" class="triage-badge" style="display:none"></span></button>
   <button class="app-tab" onclick="switchAppTab('past')">&#128214; Past</button>
   <button class="app-tab" onclick="switchAppTab('chat')" id="chatTabBtn">&#128172; Chat</button>
+  <button class="app-tab" onclick="switchAppTab('docs')">&#128206; Docs</button>
 </div>
 
 <div id="tab-meetings" class="tab-content active">
@@ -1469,6 +1652,26 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 </div>
 </div>
 
+<div id="tab-docs" class="tab-content">
+<div style="max-width:800px;margin:0 auto">
+  <div class="docs-upload" onclick="document.getElementById('docFileInput').click()">
+    <div class="upload-icon">&#128206;</div>
+    <p><strong>Click to upload</strong> or drag and drop</p>
+    <p>PDF, Excel, Word, CSV, TXT (max 10MB)</p>
+    <input type="file" id="docFileInput" accept=".pdf,.xlsx,.xls,.csv,.docx,.txt" onchange="uploadDocument(this)">
+  </div>
+  <div class="docs-filters">
+    <button class="ws-filter active" onclick="setDocFilter('all')">All</button>
+    <button class="ws-filter" onclick="setDocFilter('contract')">Contracts</button>
+    <button class="ws-filter" onclick="setDocFilter('spreadsheet')">Spreadsheets</button>
+    <button class="ws-filter" onclick="setDocFilter('report')">Reports</button>
+    <button class="ws-filter" onclick="setDocFilter('other')">Other</button>
+  </div>
+  <div id="docsSearchBox" style="margin-bottom:12px"><input type="text" placeholder="Search documents..." oninput="docSearchQuery=this.value;renderDocuments()" style="width:100%"></div>
+  <div id="docsList"><div class="empty">No documents uploaded yet.</div></div>
+</div>
+</div>
+
 <!-- Wrap-up Modal -->
 <div class="modal-overlay" id="wrapupModal">
 <div class="modal" style="width:560px">
@@ -1515,6 +1718,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <button onclick="mobileTab('workspace')" id="mnav-workspace"><span class="nav-icon">&#9745;</span>Work</button>
   <button onclick="mobileTab('past')" id="mnav-past"><span class="nav-icon">&#128214;</span>Past</button>
   <button onclick="mobileTab('chat')" id="mnav-chat"><span class="nav-icon">&#128172;</span>Chat</button>
+  <button onclick="mobileTab('docs')" id="mnav-docs"><span class="nav-icon">&#128206;</span>Docs</button>
 </div>
 </div>
 
@@ -2321,6 +2525,7 @@ function switchAppTab(tab) {
   else if (tab === 'workspace') { tabs[1].classList.add('active'); renderWorkspace(); }
   else if (tab === 'past') tabs[2].classList.add('active');
   else if (tab === 'chat') tabs[3].classList.add('active');
+  else if (tab === 'docs') { tabs[4].classList.add('active'); loadDocuments(); }
 }
 
 // --- Workspace ---
@@ -3553,6 +3758,129 @@ function mobileTab(tab) {
   document.querySelectorAll('.mobile-nav button').forEach(function(b) { b.classList.remove('active'); });
   var btn = document.getElementById('mnav-' + tab);
   if (btn) btn.classList.add('active');
+}
+
+// --- Documents ---
+var allDocs = [];
+var docFilter = 'all';
+var docSearchQuery = '';
+
+async function loadDocuments() {
+  try { var r = await fetch('/api/documents'); allDocs = await r.json(); } catch(e) { allDocs = []; }
+  renderDocuments();
+}
+
+function setDocFilter(f) {
+  docFilter = f;
+  document.querySelectorAll('#tab-docs .ws-filter').forEach(function(b){b.classList.remove('active');});
+  event.target.classList.add('active');
+  renderDocuments();
+}
+
+function getDocIcon(type) {
+  switch(type) {
+    case 'contract': return '&#128196;';
+    case 'spreadsheet': return '&#128202;';
+    case 'report': return '&#128203;';
+    default: return '&#128462;';
+  }
+}
+
+function getSuggestedQuestions(type) {
+  var qs = {
+    contract: ['Key obligations?','Any red flags?','Payment terms?','Termination clauses?'],
+    spreadsheet: ['Key numbers?','Trends?','Flag anomalies','Industry comparison'],
+    report: ['Main takeaways?','Action items?','Impact on priorities?']
+  };
+  return qs[type] || ['Summarize this document','What should I focus on?'];
+}
+
+function renderDocuments() {
+  var filtered = allDocs;
+  if (docFilter !== 'all') filtered = filtered.filter(function(d){return d.type===docFilter;});
+  if (docSearchQuery) {
+    var q = docSearchQuery.toLowerCase();
+    filtered = filtered.filter(function(d){return (d.originalName||'').toLowerCase().includes(q)||(d.summary||'').toLowerCase().includes(q)||(d.tags||[]).join(' ').toLowerCase().includes(q);});
+  }
+  filtered.sort(function(a,b){return (b.uploadedAt||'').localeCompare(a.uploadedAt||'');});
+  var el = document.getElementById('docsList');
+  if (!filtered.length) { el.innerHTML = '<div class="empty">No documents' + (docFilter!=='all'?' of this type':'') + '.</div>'; return; }
+  var html = '';
+  filtered.forEach(function(d) {
+    html += '<div class="doc-card">';
+    html += '<div class="doc-icon">' + getDocIcon(d.type) + '</div>';
+    html += '<div class="doc-body">';
+    html += '<h4>' + escHtml(d.originalName) + '</h4>';
+    html += '<div class="doc-meta"><span>' + d.type + '</span><span>' + (d.uploadedAt||'').split('T')[0] + '</span><span>' + Math.round((d.size||0)/1024) + ' KB</span></div>';
+    if (d.summary) html += '<div class="doc-summary">' + escHtml(d.summary) + '</div>';
+    if (d.tags && d.tags.length) {
+      html += '<div class="doc-tags">';
+      d.tags.forEach(function(t){html += '<span class="doc-tag">' + escHtml(t) + '</span>';});
+      html += '</div>';
+    }
+    if (d.keyPoints && d.keyPoints.length) {
+      html += '<ul class="doc-points">';
+      d.keyPoints.slice(0,3).forEach(function(p){html += '<li>' + escHtml(p) + '</li>';});
+      html += '</ul>';
+    }
+    // Suggested questions
+    var qs = getSuggestedQuestions(d.type);
+    html += '<div class="doc-questions">';
+    qs.forEach(function(q) {
+      html += '<button onclick="askClaudeAboutDoc(\'' + d.id + '\',\'' + escHtml(q).replace(/'/g,"\\'") + '\')">' + q + '</button>';
+    });
+    html += '</div>';
+    html += '</div>';
+    html += '<div class="doc-actions">';
+    html += '<button class="btn-ask" onclick="askClaudeAboutDoc(\'' + d.id + '\')">&#10024;</button>';
+    html += '<a href="/api/documents/' + d.id + '/download" class="btn btn-sm btn-purple" style="text-decoration:none;display:inline-block;padding:4px 10px;font-size:12px">&#8595;</a>';
+    html += '<button class="btn-icon del" onclick="deleteDocument(\'' + d.id + '\')" style="font-size:14px">&#128465;</button>';
+    html += '</div></div>';
+  });
+  el.innerHTML = html;
+}
+
+async function uploadDocument(input) {
+  if (!input.files.length) return;
+  var file = input.files[0];
+  if (file.size > 10*1024*1024) { alert('File too large. Max 10MB.'); input.value=''; return; }
+  var formData = new FormData();
+  formData.append('file', file);
+  formData.append('api_key', localStorage.getItem('anthropic_api_key') || '');
+  var el = document.getElementById('docsList');
+  el.innerHTML = '<div class="empty">Uploading and analyzing...</div>';
+  try {
+    var res = await fetch('/api/documents/upload', { method:'POST', body:formData });
+    var doc = await res.json();
+    if (doc.error) { el.innerHTML = '<div class="error">' + escHtml(doc.error) + '</div>'; }
+    else { allDocs.push(doc); renderDocuments(); }
+  } catch(err) { el.innerHTML = '<div class="error">Upload failed: ' + err.message + '</div>'; }
+  input.value = '';
+}
+
+async function deleteDocument(did) {
+  if (!confirm('Delete this document?')) return;
+  await fetch('/api/documents/' + did, { method:'DELETE' });
+  allDocs = allDocs.filter(function(d){return d.id!==did;});
+  renderDocuments();
+}
+
+async function askClaudeAboutDoc(did, question) {
+  var doc = allDocs.find(function(d){return d.id===did;});
+  if (!doc) return;
+  // Fetch full text
+  try {
+    var res = await fetch('/api/documents/' + did);
+    var full = await res.json();
+    var msg = 'I\'ve uploaded a document: "' + doc.originalName + '"\n\n';
+    msg += 'Summary: ' + (doc.summary || 'No summary') + '\n\n';
+    msg += 'Full content:\n' + (full.fullText || '').substring(0, 6000) + '\n\n';
+    if (question) msg += 'My question: ' + question;
+    else msg += 'What would you like to know about this document?';
+    sendToClaudeChat(msg, 'Doc: ' + doc.originalName);
+  } catch(e) {
+    sendToClaudeChat('I have a document called "' + doc.originalName + '". Summary: ' + (doc.summary||''), 'Doc: ' + doc.originalName);
+  }
 }
 
 // --- Init ---
