@@ -453,7 +453,7 @@ header h1{font-size:1.5rem}
 .today-card.active{border-left-color:#1a4fa3;background:#f5f8ff}
 .today-card.status-recording{border-left-color:#dc3535}
 .today-card.status-completed{border-left-color:#28a745}
-.today-card h4{font-size:.95rem;margin-bottom:2px}
+.today-card h4{font-size:.95rem;margin-bottom:2px;padding-right:44px}
 .today-card .time{font-size:.8rem;color:#888}
 .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle}
 .badge-scheduled{background:#e9ecef;color:#666}
@@ -467,6 +467,19 @@ header h1{font-size:1.5rem}
 .dot-green{background:#28a745}
 .completed-card{background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;font-size:13px;transition:all .15s}
 .completed-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.12);background:#f8fafc}
+.today-card .card-icons{position:absolute;top:10px;right:10px;display:none;gap:2px}
+.today-card:hover .card-icons{display:flex}
+.completed-card{position:relative}
+.completed-card .card-icons{position:absolute;top:8px;right:8px;display:flex;gap:2px}
+.card-icon-btn{background:none;border:none;font-size:13px;cursor:pointer;padding:2px 4px;border-radius:3px;color:#aaa;line-height:1}
+.card-icon-btn:hover{color:#1a4fa3;background:#f0f4ff}
+.card-icon-btn.del:hover{color:#dc3535;background:#fef2f2}
+.inline-edit{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);border:2px solid #1a4fa3}
+.inline-edit label{font-size:12px;font-weight:600;margin:8px 0 2px;display:block}
+.inline-edit label:first-child{margin-top:0}
+.inline-edit input,.inline-edit select,.inline-edit textarea{width:100%;padding:6px;font-size:13px;border:1px solid #ddd;border-radius:4px;font-family:inherit;box-sizing:border-box}
+.inline-edit textarea{height:60px;resize:vertical}
+.inline-edit .ie-actions{display:flex;gap:6px;margin-top:10px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 .card-actions{margin-top:8px;display:flex;gap:6px}
 .btn{padding:6px 14px;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
@@ -1086,6 +1099,7 @@ function renderToday() {
     var cls = 'today-card status-' + m.status;
     if (m.id === activeMeetingId) cls += ' active';
     html += '<div class="' + cls + '" onclick="selectMeeting(\'' + m.id + '\')">';
+    html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();editMeetingCard(\'' + m.id + '\')" title="Edit">&#9998;</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')" title="Delete">&#128465;</button></div>';
     html += '<h4>' + escHtml(m.title);
     if (m.status === 'scheduled') html += ' <span class="badge badge-scheduled">Scheduled</span>';
     else if (m.status === 'recording') html += ' <span class="badge badge-recording">Recording</span>';
@@ -1109,6 +1123,7 @@ function renderToday() {
     completed.forEach(function(m) {
       var dot = getMeetingStatusDot(m);
       html += '<div class="completed-card" onclick="selectMeeting(\'' + m.id + '\')">';
+      html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();selectMeeting(\'' + m.id + '\');editCompletedMeeting()" title="Edit">&#9998;</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')" title="Delete">&#128465;</button></div>';
       html += '<span class="status-dot dot-' + dot + '"></span>';
       html += '<strong>' + escHtml(m.title) + '</strong>';
       html += ' <span style="font-size:12px;color:#888">' + formatTime(m.scheduledTime) + '</span>';
@@ -1468,6 +1483,9 @@ async function addMeeting(e) {
       else { d.setDate(d.getDate() + step); }
       var nd = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
       if (endDate && nd > endDate) break;
+      // Skip if instance already exists for this date
+      var exists = allMeetings.find(function(x){return x.recurringParentId===m.id && x.scheduledDate===nd;});
+      if (exists) continue;
       var inst = await apiCreate({
         title: title, scheduledDate: nd, scheduledTime: schedTime, notes: notes,
         recurringParentId: m.id, recurringFrequency: freq, isRecurring: false
@@ -2654,9 +2672,161 @@ async function quickCapture(zone) {
   if (document.getElementById('tab-workspace').classList.contains('active')) renderWorkspace();
 }
 
+// --- Delete/Edit Meeting Cards ---
+async function deleteMeetingCard(id) {
+  var m = allMeetings.find(function(x){return x.id===id;});
+  if (!m) return;
+  var isRecurring = m.isRecurring || m.recurringParentId;
+  var parentId = m.recurringParentId || (m.isRecurring ? m.id : null);
+
+  if (m.status === 'completed') {
+    if (!confirm('Delete this completed meeting and its summary?')) return;
+    await fetch('/api/meetings/'+id, {method:'DELETE'});
+    allMeetings = allMeetings.filter(function(x){return x.id!==id;});
+    if (activeMeetingId === id) goHome();
+  } else if (isRecurring) {
+    var choice = prompt('Delete:\n1 = This meeting only\n2 = All future occurrences\n(Enter 1 or 2, or Cancel)');
+    if (choice === '1') {
+      await fetch('/api/meetings/'+id, {method:'DELETE'});
+      allMeetings = allMeetings.filter(function(x){return x.id!==id;});
+    } else if (choice === '2') {
+      var toDelete = allMeetings.filter(function(x){
+        return (x.id === parentId || x.recurringParentId === parentId) && x.scheduledDate >= m.scheduledDate && x.status !== 'completed';
+      });
+      for (var i=0; i<toDelete.length; i++) {
+        await fetch('/api/meetings/'+toDelete[i].id, {method:'DELETE'});
+      }
+      allMeetings = allMeetings.filter(function(x){
+        return !toDelete.find(function(d){return d.id===x.id;});
+      });
+    } else return;
+    if (activeMeetingId === id) goHome();
+  } else {
+    if (!confirm('Delete this meeting?')) return;
+    await fetch('/api/meetings/'+id, {method:'DELETE'});
+    allMeetings = allMeetings.filter(function(x){return x.id!==id;});
+    if (activeMeetingId === id) goHome();
+  }
+  renderToday(); renderPast();
+}
+
+function editMeetingCard(id) {
+  var m = allMeetings.find(function(x){return x.id===id;});
+  if (!m) return;
+  var isRec = m.isRecurring || m.recurringParentId;
+  // Replace the card with inline edit form
+  var cards = document.querySelectorAll('.today-card');
+  var card = null;
+  cards.forEach(function(c) { if (c.onclick && c.onclick.toString().indexOf(id) > -1) card = c; });
+  // Fallback: find by searching
+  if (!card) {
+    var all = document.querySelectorAll('[onclick*="'+id+'"]');
+    all.forEach(function(el) { if (el.classList.contains('today-card')) card = el; });
+  }
+  if (!card) return;
+  var freq = m.recurringFrequency || 'weekly';
+  var html = '<div class="inline-edit" id="ie-'+id+'">';
+  html += '<label>Title</label><input type="text" id="ie-title-'+id+'" value="'+escHtml(m.title)+'">';
+  html += '<label>Date</label><input type="date" id="ie-date-'+id+'" value="'+(m.scheduledDate||'')+'">';
+  html += '<label>Time</label><input type="time" id="ie-time-'+id+'" value="'+(m.scheduledTime||'')+'">';
+  html += '<label>Notes</label><textarea id="ie-notes-'+id+'">'+(m.notes||'')+'</textarea>';
+  if (isRec) {
+    html += '<div style="margin-top:8px;padding:8px;background:#f7fafc;border-radius:4px;font-size:12px">';
+    html += '<label><input type="radio" name="ie-scope-'+id+'" value="this" checked> This meeting only</label>';
+    html += '<label><input type="radio" name="ie-scope-'+id+'" value="future"> All future occurrences</label>';
+    html += '</div>';
+  }
+  html += '<div class="ie-actions"><button class="btn btn-sm btn-blue" onclick="saveEditMeeting(\''+id+'\')">Save</button><button class="btn btn-sm btn-gray" onclick="renderToday()">Cancel</button></div></div>';
+  card.outerHTML = html;
+}
+
+async function saveEditMeeting(id) {
+  var m = allMeetings.find(function(x){return x.id===id;});
+  if (!m) return;
+  var title = document.getElementById('ie-title-'+id).value.trim();
+  var sDate = document.getElementById('ie-date-'+id).value;
+  var sTime = document.getElementById('ie-time-'+id).value;
+  var notes = document.getElementById('ie-notes-'+id).value.trim();
+  var isRec = m.isRecurring || m.recurringParentId;
+  var scope = 'this';
+  if (isRec) {
+    var radios = document.querySelectorAll('[name="ie-scope-'+id+'"]');
+    radios.forEach(function(r) { if (r.checked) scope = r.value; });
+  }
+
+  await apiUpdate(id, {title:title, scheduledDate:sDate, scheduledTime:sTime, notes:notes});
+  m.title = title; m.scheduledDate = sDate; m.scheduledTime = sTime; m.notes = notes;
+
+  if (scope === 'future' && isRec) {
+    var parentId = m.recurringParentId || m.id;
+    var future = allMeetings.filter(function(x){
+      return (x.recurringParentId === parentId || x.id === parentId) && x.id !== id && x.scheduledDate > m.scheduledDate && x.status !== 'completed';
+    });
+    for (var i=0; i<future.length; i++) {
+      await apiUpdate(future[i].id, {title:title, scheduledTime:sTime, notes:notes});
+      future[i].title = title; future[i].scheduledTime = sTime; future[i].notes = notes;
+    }
+  }
+  renderToday();
+}
+
+function editCompletedMeeting() {
+  // Turn right panel into edit mode for completed meeting
+  var m = allMeetings.find(function(x){return x.id===activeMeetingId;});
+  if (!m) return;
+  var titleEl = document.getElementById('activeTitleEl');
+  titleEl.innerHTML = '<input type="text" id="edit-title" value="'+escHtml(m.title)+'" style="font-size:1.1rem;font-weight:700;border:1px solid #ddd;border-radius:4px;padding:4px 8px;width:100%">';
+  var ta = document.getElementById('transcript');
+  ta.readOnly = false; ta.style.maxHeight = '200px'; ta.style.cursor = '';
+  var summaryEl = document.getElementById('summaryText');
+  summaryEl.outerHTML = '<textarea id="edit-summary" style="width:100%;min-height:100px;padding:8px;font-size:14px;border:1px solid #ddd;border-radius:4px;font-family:inherit">'+escHtml(m.summary||'')+'</textarea>';
+  var actionsEl = document.getElementById('resultActions');
+  actionsEl.innerHTML = '<button class="btn btn-start" onclick="saveCompletedEdit()">Save Changes</button><button class="btn btn-gray" onclick="selectMeeting(activeMeetingId)">Cancel</button>';
+}
+
+async function saveCompletedEdit() {
+  var m = allMeetings.find(function(x){return x.id===activeMeetingId;});
+  if (!m) return;
+  var title = document.getElementById('edit-title').value.trim() || m.title;
+  var transcript = document.getElementById('transcript').value;
+  var summaryEl = document.getElementById('edit-summary');
+  var summary = summaryEl ? summaryEl.value : m.summary;
+  await apiUpdate(m.id, {title:title, transcript:transcript, summary:summary});
+  m.title = title; m.transcript = transcript; m.summary = summary;
+  // Restore normal view
+  var el = document.getElementById('edit-summary');
+  if (el) el.outerHTML = '<pre id="summaryText"></pre>';
+  selectMeeting(m.id);
+  renderToday();
+}
+
+// --- Fix Recurring Duplicates on Load ---
+async function deduplicateRecurring() {
+  var seen = {};
+  var toDelete = [];
+  allMeetings.forEach(function(m) {
+    if (m.recurringParentId) {
+      var key = m.recurringParentId + '-' + m.scheduledDate;
+      if (seen[key]) { toDelete.push(m.id); }
+      else { seen[key] = true; }
+    }
+  });
+  for (var i=0; i<toDelete.length; i++) {
+    await fetch('/api/meetings/'+toDelete[i], {method:'DELETE'});
+  }
+  if (toDelete.length) {
+    allMeetings = allMeetings.filter(function(m){ return toDelete.indexOf(m.id) === -1; });
+    renderToday();
+  }
+}
+
 // --- Init ---
-loadMeetings();
-loadWorkspace();
+async function init() {
+  await loadMeetings();
+  await loadWorkspace();
+  deduplicateRecurring();
+}
+init();
 </script>
 </body>
 </html>
