@@ -471,9 +471,9 @@ header h1{font-size:1.5rem}
 .today-card:hover .card-icons{display:flex}
 .completed-card{position:relative}
 .completed-card .card-icons{position:absolute;top:8px;right:8px;display:flex;gap:2px}
-.card-icon-btn{background:none;border:none;font-size:13px;cursor:pointer;padding:2px 4px;border-radius:3px;color:#aaa;line-height:1}
-.card-icon-btn:hover{color:#1a4fa3;background:#f0f4ff}
-.card-icon-btn.del:hover{color:#dc3535;background:#fef2f2}
+.card-icon-btn{background:none;border:1px solid #ddd;font-size:11px;cursor:pointer;padding:2px 6px;border-radius:3px;color:#888;line-height:1;font-weight:600}
+.card-icon-btn:hover{color:#1a4fa3;background:#f0f4ff;border-color:#1a4fa3}
+.card-icon-btn.del:hover{color:#dc3535;background:#fef2f2;border-color:#dc3535}
 .inline-edit{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);border:2px solid #1a4fa3}
 .inline-edit label{font-size:12px;font-weight:600;margin:8px 0 2px;display:block}
 .inline-edit label:first-child{margin-top:0}
@@ -1098,8 +1098,8 @@ function renderToday() {
   scheduled.forEach(function(m) {
     var cls = 'today-card status-' + m.status;
     if (m.id === activeMeetingId) cls += ' active';
-    html += '<div class="' + cls + '" onclick="selectMeeting(\'' + m.id + '\')">';
-    html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();editMeetingCard(\'' + m.id + '\')" title="Edit">&#9998;</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')" title="Delete">&#128465;</button></div>';
+    html += '<div class="' + cls + '" data-mid="' + m.id + '" onclick="selectMeeting(\'' + m.id + '\')">';
+    html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();editMeetingCard(\'' + m.id + '\')">Edit</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')">Del</button></div>';
     html += '<h4>' + escHtml(m.title);
     if (m.status === 'scheduled') html += ' <span class="badge badge-scheduled">Scheduled</span>';
     else if (m.status === 'recording') html += ' <span class="badge badge-recording">Recording</span>';
@@ -1123,7 +1123,7 @@ function renderToday() {
     completed.forEach(function(m) {
       var dot = getMeetingStatusDot(m);
       html += '<div class="completed-card" onclick="selectMeeting(\'' + m.id + '\')">';
-      html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();selectMeeting(\'' + m.id + '\');editCompletedMeeting()" title="Edit">&#9998;</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')" title="Delete">&#128465;</button></div>';
+      html += '<div class="card-icons"><button class="card-icon-btn" onclick="event.stopPropagation();selectMeeting(\'' + m.id + '\');setTimeout(editCompletedMeeting,100)">Edit</button><button class="card-icon-btn del" onclick="event.stopPropagation();deleteMeetingCard(\'' + m.id + '\')">Del</button></div>';
       html += '<span class="status-dot dot-' + dot + '"></span>';
       html += '<strong>' + escHtml(m.title) + '</strong>';
       html += ' <span style="font-size:12px;color:#888">' + formatTime(m.scheduledTime) + '</span>';
@@ -2714,15 +2714,7 @@ function editMeetingCard(id) {
   var m = allMeetings.find(function(x){return x.id===id;});
   if (!m) return;
   var isRec = m.isRecurring || m.recurringParentId;
-  // Replace the card with inline edit form
-  var cards = document.querySelectorAll('.today-card');
-  var card = null;
-  cards.forEach(function(c) { if (c.onclick && c.onclick.toString().indexOf(id) > -1) card = c; });
-  // Fallback: find by searching
-  if (!card) {
-    var all = document.querySelectorAll('[onclick*="'+id+'"]');
-    all.forEach(function(el) { if (el.classList.contains('today-card')) card = el; });
-  }
+  var card = document.querySelector('[data-mid="'+id+'"]');
   if (!card) return;
   var freq = m.recurringFrequency || 'weekly';
   var html = '<div class="inline-edit" id="ie-'+id+'">';
