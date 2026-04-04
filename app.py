@@ -465,8 +465,8 @@ header h1{font-size:1.5rem}
 .dot-red{background:#dc3535}
 .dot-yellow{background:#f59e0b}
 .dot-green{background:#28a745}
-.completed-card{background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;font-size:13px}
-.completed-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.completed-card{background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;font-size:13px;transition:all .15s}
+.completed-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.12);background:#f8fafc}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 .card-actions{margin-top:8px;display:flex;gap:6px}
 .btn{padding:6px 14px;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
@@ -790,11 +790,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
           <p style="font-size:12px;color:#888;margin-bottom:8px">Ready-to-paste prompts for Claude</p>
           <div id="promptsList"></div>
         </div>
-        <div class="result-actions">
-          <button class="btn btn-start" onclick="saveMeetingAndWrapup()" style="padding:10px 20px">Save Meeting</button>
-          <button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>
-          <button class="btn" onclick="discardMeeting()" style="background:none;color:#dc3535;border:1px solid #dc3535">Discard</button>
-        </div>
+        <div class="result-actions" id="resultActions"></div>
       </div>
     </div>
   </div>
@@ -1245,24 +1241,42 @@ function selectMeeting(id) {
   document.getElementById('timerEl').style.display = 'none';
   renderLinkedTasks(id);
 
-  if (m.status === 'recording') {
-    document.getElementById('startBtn').style.display = 'none';
-    document.getElementById('stopBtn').style.display = '';
-    document.getElementById('statusText').textContent = 'Recording...';
-    document.getElementById('statusText').classList.add('live');
-    document.getElementById('sumBtn').disabled = true;
-  } else if (m.status === 'completed') {
-    document.getElementById('startBtn').style.display = 'none';
-    document.getElementById('stopBtn').style.display = 'none';
-    document.getElementById('sumBtn').disabled = true;
+  if (m.status === 'completed') {
+    // Hide recording controls, show review-only view
+    document.getElementById('recControls').style.display = 'none';
+    document.getElementById('sumBtn').style.display = 'none';
+    // Make transcript read-only and collapsible
+    var ta = document.getElementById('transcript');
+    ta.readOnly = true;
+    ta.style.maxHeight = '80px';
+    ta.style.cursor = 'pointer';
+    ta.title = 'Click to expand/collapse';
+    ta.onclick = function() {
+      ta.style.maxHeight = ta.style.maxHeight === '80px' ? '300px' : '80px';
+    };
     showResults(m);
   } else {
-    document.getElementById('startBtn').style.display = '';
-    document.getElementById('stopBtn').style.display = 'none';
-    document.getElementById('sumBtn').disabled = !(m.transcript && m.transcript.trim());
-  }
+    // Show recording controls for non-completed
+    document.getElementById('recControls').style.display = '';
+    document.getElementById('sumBtn').style.display = '';
+    var ta = document.getElementById('transcript');
+    ta.readOnly = false;
+    ta.style.maxHeight = '';
+    ta.style.cursor = '';
+    ta.title = '';
+    ta.onclick = null;
 
-  if (m.status !== 'completed') {
+    if (m.status === 'recording') {
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = '';
+      document.getElementById('statusText').textContent = 'Recording...';
+      document.getElementById('statusText').classList.add('live');
+      document.getElementById('sumBtn').disabled = true;
+    } else {
+      document.getElementById('startBtn').style.display = '';
+      document.getElementById('stopBtn').style.display = 'none';
+      document.getElementById('sumBtn').disabled = !(m.transcript && m.transcript.trim());
+    }
     document.getElementById('resultArea').style.display = 'none';
   }
   renderToday();
@@ -1278,28 +1292,47 @@ function showResults(m) {
   var actions = m.actions || [];
   var section = document.getElementById('actionSection');
   var html = '';
+  var isReview = m.status === 'completed';
   if (actions.length) {
     html += '<div class="ai-header">';
     html += '<h3>Action Items <span class="ai-count">(' + actions.length + ')</span></h3>';
-    html += '<label><input type="checkbox" id="aiSelectAll" onchange="aiToggleAll(this.checked)"> Select All</label>';
-    html += '<button class="ai-bulk-btn" onclick="aiAddAllToWorkspace()">+ Add All to Workspace</button>';
+    if (!isReview) {
+      html += '<label><input type="checkbox" id="aiSelectAll" onchange="aiToggleAll(this.checked)"> Select All</label>';
+      html += '<button class="ai-bulk-btn" onclick="aiAddAllToWorkspace()">+ Add All to Workspace</button>';
+    }
     html += '</div>';
     actions.forEach(function(a, idx) {
       var inWs = wsTaskExists(a, m.id);
+      var wsTask = inWs ? allTasks.find(function(t){return t.text===a && t.meetingId===m.id;}) : null;
       html += '<div class="ai-item">';
-      html += '<input type="checkbox" class="ai-cb" data-idx="' + idx + '" onchange="aiUpdateSelectedCount()">';
+      if (!isReview) {
+        html += '<input type="checkbox" class="ai-cb" data-idx="' + idx + '" onchange="aiUpdateSelectedCount()">';
+      }
       html += '<span class="ai-icon">&#128203;</span>';
       html += '<span class="ai-text">' + escHtml(a) + '</span>';
-      if (inWs) {
-        html += '<span class="action-add-btn added" style="cursor:default">\u2713 In Workspace</span>';
-      } else {
+      if (inWs && wsTask) {
+        var zone = wsTask.zone || 'triage';
+        var zoneLabels = {focus:'Focus',waiting:'Waiting',upcoming:'Upcoming',backlog:'Backlog',triage:'Triage'};
+        var zoneColors = {focus:'#dc3535',waiting:'#f59e0b',upcoming:'#2b6cb0',backlog:'#718096',triage:'#e67e22'};
+        var label = zoneLabels[zone] || zone;
+        var color = zoneColors[zone] || '#888';
+        if (wsTask.completed) {
+          html += '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;font-weight:600">&#10003; Done</span>';
+        } else {
+          html += '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' + color + '20;color:' + color + ';font-weight:600">' + label + '</span>';
+        }
+      } else if (!isReview) {
         html += '<button class="action-add-btn" onclick="aiAddSingle(' + idx + ',this)">+ Add</button>';
+      } else {
+        html += '<span style="font-size:11px;color:#dc3535;font-weight:600">Not triaged</span>';
       }
       html += '</div>';
     });
-    html += '<div class="ai-selected-bar" id="aiSelectedBar" style="display:none">';
-    html += '<button class="ai-bulk-btn" onclick="aiAddSelectedToWorkspace()" id="aiAddSelectedBtn">+ Add Selected to Workspace</button>';
-    html += '</div>';
+    if (!isReview) {
+      html += '<div class="ai-selected-bar" id="aiSelectedBar" style="display:none">';
+      html += '<button class="ai-bulk-btn" onclick="aiAddSelectedToWorkspace()" id="aiAddSelectedBtn">+ Add Selected to Workspace</button>';
+      html += '</div>';
+    }
   } else {
     html += '<h3 style="color:#1a4fa3;font-size:.95rem;margin:14px 0 8px">Action Items <span style="color:#888;font-weight:400">(0)</span></h3>';
     html += '<div class="empty" style="padding:10px">No action items.</div>';
@@ -1319,6 +1352,17 @@ function showResults(m) {
     });
     pa.style.display = '';
   } else { pa.style.display = 'none'; }
+  // Result action buttons — different for review vs new
+  var actionsEl = document.getElementById('resultActions');
+  if (isReview) {
+    actionsEl.innerHTML = '<button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>'
+      + '<button class="btn btn-outline" onclick="goHome()">Back</button>'
+      + '<button class="btn" onclick="discardMeeting()" style="background:none;color:#dc3535;border:1px solid #dc3535">Discard</button>';
+  } else {
+    actionsEl.innerHTML = '<button class="btn btn-start" onclick="saveMeetingAndWrapup()" style="padding:10px 20px">Save Meeting</button>'
+      + '<button class="btn btn-purple" onclick="downloadPkg(activeMeetingId)">Download Package</button>'
+      + '<button class="btn" onclick="discardMeeting()" style="background:none;color:#dc3535;border:1px solid #dc3535">Discard</button>';
+  }
   document.getElementById('resultArea').style.display = '';
 }
 
