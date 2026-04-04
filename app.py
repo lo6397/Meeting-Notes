@@ -17,6 +17,15 @@ DATA_FILE = os.path.join(DATA_DIR, 'meetings.json')
 EOD_FILE = os.path.join(DATA_DIR, 'eod_summaries.json')
 WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.json')
 
+# Migrate old root-level data files into DATA_DIR
+_app_root = os.path.dirname(os.path.abspath(__file__))
+for _fname in ['meetings.json', 'workspace.json', 'eod_summaries.json', 'auth.json']:
+    _old = os.path.join(_app_root, _fname)
+    _new = os.path.join(DATA_DIR, _fname)
+    if os.path.exists(_old) and not os.path.exists(_new):
+        import shutil
+        shutil.move(_old, _new)
+
 def get_password_hash():
     env_pw = os.environ.get('APP_PASSWORD', '')
     if env_pw:
@@ -79,12 +88,18 @@ def health():
     for f in [DATA_FILE, WORKSPACE_FILE, EOD_FILE]:
         if os.path.exists(f):
             last_mod = max(last_mod, os.path.getmtime(f))
+    files = {}
+    for name, path in [('meetings.json', DATA_FILE), ('workspace.json', WORKSPACE_FILE),
+                        ('eod_summaries.json', EOD_FILE), ('auth.json', AUTH_FILE)]:
+        files[name] = {'exists': os.path.exists(path), 'size': os.path.getsize(path) if os.path.exists(path) else 0}
     return jsonify({
         'status': 'ok',
+        'data_dir': DATA_DIR,
+        'files': files,
         'meetings_count': len(meetings),
         'workspace_tasks': len(tasks),
+        'workspace_incomplete': len([t for t in tasks if not t.get('completed')]),
         'eod_summaries': len(eods),
-        'data_dir': DATA_DIR,
         'last_updated': datetime.fromtimestamp(last_mod).isoformat() if last_mod else None
     })
 
