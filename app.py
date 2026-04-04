@@ -1,16 +1,53 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 import anthropic
 import os, json, uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
+app.permanent_session_lifetime = timedelta(hours=24)
 
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 
+AUTH_FILE = os.path.join(DATA_DIR, 'auth.json')
 DATA_FILE = os.path.join(DATA_DIR, 'meetings.json')
 EOD_FILE = os.path.join(DATA_DIR, 'eod_summaries.json')
 WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.json')
+
+def get_password_hash():
+    env_pw = os.environ.get('APP_PASSWORD', '')
+    if env_pw:
+        return generate_password_hash(env_pw)
+    if os.path.exists(AUTH_FILE):
+        try:
+            with open(AUTH_FILE) as f:
+                return json.load(f).get('password_hash', '')
+        except Exception:
+            pass
+    return ''
+
+def save_password_hash(pw_hash):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(AUTH_FILE, 'w') as f:
+        json.dump({'password_hash': pw_hash}, f)
+
+def needs_setup():
+    return not get_password_hash()
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if needs_setup():
+            return redirect(url_for('setup'))
+        if not session.get('authenticated'):
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'error': 'Not authenticated'}), 401
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
 
 def load_meetings():
     if os.path.exists(DATA_FILE):
@@ -33,6 +70,7 @@ def find_meeting(mid):
     return None, meetings
 
 @app.route('/health')
+@login_required
 def health():
     meetings = load_meetings()
     tasks = load_workspace()
@@ -51,6 +89,7 @@ def health():
     })
 
 @app.route('/backup')
+@login_required
 def backup():
     import zipfile, io
     buf = io.BytesIO()
@@ -65,15 +104,126 @@ def backup():
                      as_attachment=True,
                      download_name='meeting-recorder-backup-' + date.today().isoformat() + '.zip')
 
+LOGIN_HTML = """
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign In - Meeting Recorder</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-card{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:90vw;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}
+.logo{font-size:1.5rem;font-weight:700;color:#1a4fa3;margin-bottom:4px}
+.subtitle{color:#888;font-size:.9rem;margin-bottom:28px}
+label{display:block;text-align:left;font-weight:600;font-size:13px;margin-bottom:4px;color:#333}
+input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #ddd;border-radius:6px;margin-bottom:16px;box-sizing:border-box}
+.btn{width:100%;padding:12px;background:#1a4fa3;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer}
+.btn:hover{background:#153d80}
+.error{color:#dc3535;font-size:13px;margin-bottom:12px}
+.reset-link{font-size:12px;color:#888;margin-top:16px;display:block}
+.reset-link:hover{color:#1a4fa3}
+</style></head><body>
+<div class="login-card">
+<div class="logo">Vellum Health</div>
+<div class="subtitle">Meeting Recorder</div>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="POST">
+<label>Password</label>
+<input type="password" name="password" placeholder="Enter password" autofocus required>
+<button class="btn" type="submit">Sign In</button>
+</form>
+<a class="reset-link" href="#" onclick="document.getElementById('reset-info').style.display='block';return false">Forgot password?</a>
+<div id="reset-info" style="display:none;margin-top:12px;font-size:12px;color:#555;background:#f7fafc;padding:10px;border-radius:6px;text-align:left">
+To reset your password, update the <strong>APP_PASSWORD</strong> environment variable in Railway and redeploy.</div>
+</div></body></html>
+"""
+
+SETUP_HTML = """
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Setup - Meeting Recorder</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-card{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:90vw;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}
+.logo{font-size:1.5rem;font-weight:700;color:#1a4fa3;margin-bottom:4px}
+.subtitle{color:#888;font-size:.9rem;margin-bottom:28px}
+label{display:block;text-align:left;font-weight:600;font-size:13px;margin-bottom:4px;color:#333;margin-top:12px}
+label:first-of-type{margin-top:0}
+input[type=password]{width:100%;padding:10px;font-size:15px;border:1px solid #ddd;border-radius:6px;margin-bottom:4px;box-sizing:border-box}
+.btn{width:100%;padding:12px;background:#28a745;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;margin-top:16px}
+.btn:hover{background:#1e7e34}
+.error{color:#dc3535;font-size:13px;margin-bottom:12px}
+</style></head><body>
+<div class="login-card">
+<div class="logo">Vellum Health</div>
+<div class="subtitle">Create Your Password</div>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="POST">
+<label>New Password</label>
+<input type="password" name="password" placeholder="Choose a password" required minlength="4">
+<label>Confirm Password</label>
+<input type="password" name="confirm" placeholder="Confirm password" required>
+<button class="btn" type="submit">Create Password &amp; Sign In</button>
+</form>
+</div></body></html>
+"""
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if needs_setup():
+        return redirect(url_for('setup'))
+    error = ''
+    if request.method == 'POST':
+        pw = request.form.get('password', '')
+        pw_hash = get_password_hash()
+        # Check against env var directly or stored hash
+        env_pw = os.environ.get('APP_PASSWORD', '')
+        if env_pw and pw == env_pw:
+            session.permanent = True
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        elif pw_hash and check_password_hash(pw_hash, pw):
+            session.permanent = True
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        else:
+            error = 'Invalid password'
+    return render_template_string(LOGIN_HTML, error=error)
+
+@app.route('/setup', methods=['GET', 'POST'])
+def setup():
+    if not needs_setup():
+        return redirect(url_for('login'))
+    error = ''
+    if request.method == 'POST':
+        pw = request.form.get('password', '')
+        confirm = request.form.get('confirm', '')
+        if len(pw) < 4:
+            error = 'Password must be at least 4 characters'
+        elif pw != confirm:
+            error = 'Passwords do not match'
+        else:
+            save_password_hash(generate_password_hash(pw))
+            session.permanent = True
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+    return render_template_string(SETUP_HTML, error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def index():
     return render_template_string(HTML)
 
 @app.route('/api/meetings')
+@login_required
 def api_list():
     return jsonify(load_meetings())
 
 @app.route('/api/meetings', methods=['POST'])
+@login_required
 def api_create():
     d = request.json
     m = {
@@ -100,6 +250,7 @@ def api_create():
     return jsonify(m)
 
 @app.route('/api/meetings/<mid>', methods=['PUT'])
+@login_required
 def api_update(mid):
     m, meetings = find_meeting(mid)
     if not m:
@@ -112,6 +263,7 @@ def api_update(mid):
     return jsonify(m)
 
 @app.route('/api/meetings/<mid>', methods=['DELETE'])
+@login_required
 def api_delete(mid):
     meetings = load_meetings()
     meetings = [m for m in meetings if m['id'] != mid]
@@ -132,10 +284,12 @@ def save_eod(summaries):
         json.dump(summaries, f, indent=2)
 
 @app.route('/api/eod', methods=['GET'])
+@login_required
 def api_eod_list():
     return jsonify(load_eod())
 
 @app.route('/api/eod', methods=['POST'])
+@login_required
 def api_eod_create():
     d = request.json
     entry = {
@@ -153,6 +307,7 @@ def api_eod_create():
     return jsonify(entry)
 
 @app.route('/api/eod/<eid>', methods=['DELETE'])
+@login_required
 def api_eod_delete(eid):
     summaries = load_eod()
     summaries = [s for s in summaries if s['id'] != eid]
@@ -173,10 +328,12 @@ def save_workspace(tasks):
         json.dump(tasks, f, indent=2)
 
 @app.route('/api/workspace', methods=['GET'])
+@login_required
 def api_ws_list():
     return jsonify(load_workspace())
 
 @app.route('/api/workspace', methods=['POST'])
+@login_required
 def api_ws_create():
     d = request.json
     task = {
@@ -202,6 +359,7 @@ def api_ws_create():
     return jsonify(task)
 
 @app.route('/api/workspace/<tid>', methods=['PUT'])
+@login_required
 def api_ws_update(tid):
     tasks = load_workspace()
     for t in tasks:
@@ -215,6 +373,7 @@ def api_ws_update(tid):
     return jsonify({'error': 'Not found'}), 404
 
 @app.route('/api/workspace/<tid>', methods=['DELETE'])
+@login_required
 def api_ws_delete(tid):
     tasks = load_workspace()
     tasks = [t for t in tasks if t['id'] != tid]
@@ -222,6 +381,7 @@ def api_ws_delete(tid):
     return jsonify({'ok': True})
 
 @app.route('/api/workspace/suggest-zones', methods=['POST'])
+@login_required
 def api_suggest_zones():
     d = request.json
     tasks = d.get('tasks', [])
@@ -252,6 +412,7 @@ Tasks:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/tasks/<tid>/notes', methods=['POST'])
+@login_required
 def api_task_add_note(tid):
     tasks = load_workspace()
     for t in tasks:
@@ -271,6 +432,7 @@ def api_task_add_note(tid):
     return jsonify({'error': 'Not found'}), 404
 
 @app.route('/api/tasks/<tid>/notes/<int:nidx>', methods=['PUT'])
+@login_required
 def api_task_edit_note(tid, nidx):
     tasks = load_workspace()
     for t in tasks:
@@ -289,6 +451,7 @@ def api_task_edit_note(tid, nidx):
     return jsonify({'error': 'Task not found'}), 404
 
 @app.route('/api/tasks/<tid>/notes/<int:nidx>', methods=['DELETE'])
+@login_required
 def api_task_delete_note(tid, nidx):
     tasks = load_workspace()
     for t in tasks:
@@ -302,6 +465,7 @@ def api_task_delete_note(tid, nidx):
     return jsonify({'error': 'Task not found'}), 404
 
 @app.route('/api/tasks/<tid>/link-meeting', methods=['POST'])
+@login_required
 def api_link_task(tid):
     tasks = load_workspace()
     for t in tasks:
@@ -315,12 +479,14 @@ def api_link_task(tid):
     return jsonify({'error': 'Task not found'}), 404
 
 @app.route('/api/meetings/<mid>/linked-tasks')
+@login_required
 def api_linked_tasks(mid):
     tasks = load_workspace()
     linked = [t for t in tasks if t.get('linkedMeetingId') == mid]
     return jsonify(linked)
 
 @app.route('/api/meetings/<mid>/draft-agenda', methods=['POST'])
+@login_required
 def api_draft_agenda(mid):
     m, meetings = find_meeting(mid)
     if not m:
@@ -370,6 +536,7 @@ Please create:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/chat', methods=['POST'])
+@login_required
 def api_chat():
     d = request.json
     messages = d.get('messages', [])
@@ -389,6 +556,7 @@ def api_chat():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/summarize', methods=['POST'])
+@login_required
 def summarize():
     d = request.json
     transcript = d.get('transcript', '')
@@ -758,6 +926,7 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <label>Anthropic API Key</label>
   <input type="password" id="apiKey" placeholder="sk-ant-...">
   <p style="font-size:12px;color:#888;margin-top:4px">Saved in your browser only.</p>
+  <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee"><a href="/logout" style="color:#dc3535;font-size:13px;font-weight:600;text-decoration:none">Sign Out</a></div>
 </div>
 
 <div class="app-tabs">
