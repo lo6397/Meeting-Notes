@@ -444,7 +444,8 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 header h1{font-size:1.5rem}
 .gear-btn{background:none;border:none;font-size:22px;cursor:pointer;padding:6px}
 .main{display:flex;gap:28px;min-height:500px}
-.left-panel{width:340px;flex-shrink:0}
+.left-panel{width:340px;flex-shrink:0;transition:width .2s}
+.left-panel.week-mode{width:560px}
 .right-panel{flex:1;background:#fff;border-radius:10px;padding:28px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .panel-title{font-size:1rem;color:#555;margin-bottom:12px}
 .today-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer;border-left:4px solid #ccc;transition:all .15s}
@@ -698,7 +699,28 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .past-eod h3{margin-bottom:10px;font-size:1rem}
 .past-eod-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;justify-content:space-between;align-items:center}
 .past-eod-card .info{font-size:14px}.past-eod-card .date{font-size:12px;color:#888}
-@media(max-width:768px){.main{flex-direction:column}.left-panel{width:100%}.eod-main{flex-direction:column}}
+/* View toggle */
+.view-toggle{display:inline-flex;border:1px solid #ddd;border-radius:5px;overflow:hidden;margin-left:8px;vertical-align:middle}
+.view-toggle button{padding:2px 10px;font-size:11px;font-weight:600;border:none;background:#fff;cursor:pointer;color:#555}
+.view-toggle button.active{background:#1a4fa3;color:#fff}
+/* Week view */
+.week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px}
+.week-col{background:#fff;border-radius:6px;padding:6px;min-height:80px;box-shadow:0 1px 2px rgba(0,0,0,.04);font-size:12px}
+.week-col.is-today{background:#ebf8ff;border:1px solid #bee3f8}
+.week-col-header{text-align:center;margin-bottom:4px}
+.week-col-day{font-weight:700;font-size:11px;color:#555}
+.week-col-date{font-size:13px;font-weight:700;color:#1a4fa3}
+.week-card{background:#f7fafc;border-radius:4px;padding:4px 6px;margin-bottom:3px;cursor:pointer;font-size:11px;border-left:3px solid #ccc}
+.week-card:hover{background:#edf2f7}
+.week-card.status-completed{border-left-color:#28a745}
+.week-card.status-recording{border-left-color:#dc3535}
+.week-card .wc-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.week-card .wc-time{color:#888;font-size:10px}
+.week-card .wc-icons{font-size:10px}
+.week-add{text-align:center;margin-top:4px}
+.week-add button{background:none;border:1px dashed #ccc;border-radius:4px;width:100%;padding:2px;font-size:14px;cursor:pointer;color:#888}
+.week-add button:hover{border-color:#1a4fa3;color:#1a4fa3}
+@media(max-width:768px){.main{flex-direction:column}.left-panel{width:100%}.eod-main{flex-direction:column}.week-grid{grid-template-columns:repeat(3,1fr)}.left-panel{width:100%}}
 </style>
 </head>
 <body>
@@ -1029,13 +1051,23 @@ async function apiDelete(id) {
 }
 
 // --- Render Today ---
+var calView = 'day'; // 'day' or 'week'
+
+function toLocalDate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 function renderToday() {
+  var panel = document.querySelector('.left-panel');
+  if (calView === 'week') { panel.classList.add('week-mode'); renderWeekView(); return; }
+  panel.classList.remove('week-mode');
   var isToday = viewingDate === today();
   var label = isToday ? "Today's Meetings" : 'Meetings';
   document.getElementById('todayLabel').innerHTML = '<button class="btn btn-sm" onclick="navDate(-1)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-right:6px;font-size:14px;cursor:pointer">&larr;</button>'
     + label + ' - ' + formatDate(viewingDate)
     + '<button class="btn btn-sm" onclick="navDate(1)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-left:6px;font-size:14px;cursor:pointer">&rarr;</button>'
-    + (!isToday ? ' <button class="btn btn-sm btn-blue" onclick="navToday()" style="padding:2px 8px;margin-left:6px;font-size:11px">Today</button>' : '');
+    + (!isToday ? ' <button class="btn btn-sm btn-blue" onclick="navToday()" style="padding:2px 8px;margin-left:6px;font-size:11px">Today</button>' : '')
+    + ' <span class="view-toggle"><button class="'+(calView==='day'?'active':'')+'" onclick="setCalView(\'day\')">Day</button><button class="'+(calView==='week'?'active':'')+'" onclick="setCalView(\'week\')">Week</button></span>';
   var list = allMeetings.filter(function(m) { return m.scheduledDate === viewingDate; });
   list.sort(function(a,b) { return (a.scheduledTime||'').localeCompare(b.scheduledTime||''); });
   var el = document.getElementById('todayList');
@@ -1065,10 +1097,59 @@ function renderToday() {
   el.innerHTML = html;
 }
 
+function setCalView(v) { calView = v; renderToday(); }
+
+function getWeekStart(dateStr) {
+  var d = new Date(dateStr + 'T12:00:00');
+  var day = d.getDay(); // 0=Sun
+  var diff = day === 0 ? 6 : day - 1; // Mon=0
+  d.setDate(d.getDate() - diff);
+  return d;
+}
+
+function renderWeekView() {
+  var ws = getWeekStart(viewingDate);
+  var we = new Date(ws); we.setDate(we.getDate() + 6);
+  var wsStr = ws.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  var weStr = we.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var todayStr = today();
+
+  document.getElementById('todayLabel').innerHTML = '<button class="btn btn-sm" onclick="navDate(-7)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-right:6px;font-size:14px;cursor:pointer">&larr;</button>'
+    + 'Week of ' + wsStr + ' - ' + weStr
+    + '<button class="btn btn-sm" onclick="navDate(7)" style="background:none;border:1px solid #ddd;padding:2px 8px;margin-left:6px;font-size:14px;cursor:pointer">&rarr;</button>'
+    + ' <button class="btn btn-sm btn-blue" onclick="navToday()" style="padding:2px 8px;margin-left:6px;font-size:11px">Today</button>'
+    + ' <span class="view-toggle"><button class="'+(calView==='day'?'active':'')+'" onclick="setCalView(\'day\')">Day</button><button class="'+(calView==='week'?'active':'')+'" onclick="setCalView(\'week\')">Week</button></span>';
+
+  var dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  var html = '<div class="week-grid">';
+  for (var i = 0; i < 7; i++) {
+    var d = new Date(ws);
+    d.setDate(d.getDate() + i);
+    var ds = toLocalDate(d);
+    var isT = ds === todayStr;
+    html += '<div class="week-col' + (isT ? ' is-today' : '') + '">';
+    html += '<div class="week-col-header"><div class="week-col-day">' + dayNames[i] + '</div><div class="week-col-date">' + d.getDate() + '</div></div>';
+    var dayMeetings = allMeetings.filter(function(m){return m.scheduledDate === ds;});
+    dayMeetings.sort(function(a,b){return (a.scheduledTime||'').localeCompare(b.scheduledTime||'');});
+    dayMeetings.forEach(function(m) {
+      var wcCls = 'week-card status-' + m.status;
+      html += '<div class="' + wcCls + '" onclick="viewingDate=\'' + ds + '\';selectMeeting(\'' + m.id + '\')">';
+      html += '<div class="wc-title">' + escHtml(m.title) + '</div>';
+      html += '<div class="wc-time">' + formatTime(m.scheduledTime);
+      if (m.isRecurring || m.recurringParentId) html += ' &#128257;';
+      html += '</div></div>';
+    });
+    html += '<div class="week-add"><button onclick="event.stopPropagation();viewingDate=\'' + ds + '\';showAddModal()">+</button></div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  document.getElementById('todayList').innerHTML = html;
+}
+
 function navDate(offset) {
   var d = new Date(viewingDate + 'T12:00:00');
   d.setDate(d.getDate() + offset);
-  viewingDate = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  viewingDate = toLocalDate(d);
   renderToday();
 }
 function navToday() { viewingDate = today(); renderToday(); }
