@@ -448,7 +448,7 @@ header h1{font-size:1.5rem}
 .left-panel.week-mode{width:560px}
 .right-panel{flex:1;background:#fff;border-radius:10px;padding:28px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .panel-title{font-size:1rem;color:#555;margin-bottom:12px}
-.today-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer;border-left:4px solid #ccc;transition:all .15s}
+.today-card{background:#fff;border-radius:8px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer;border-left:4px solid #ccc;transition:all .15s;position:relative}
 .today-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1)}
 .today-card.active{border-left-color:#1a4fa3;background:#f5f8ff}
 .today-card.status-recording{border-left-color:#dc3535}
