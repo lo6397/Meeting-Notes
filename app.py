@@ -932,6 +932,198 @@ Please create:
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ---- Calendar Sync (iCal) ----
+def load_calendar_sync():
+    return load_json_file(get_user_file('calendar_sync.json'))
+
+def save_calendar_sync(data):
+    save_json_file(get_user_file('calendar_sync.json'), data)
+
+def fetch_ical_events(ical_url, start_date, end_date):
+    """Fetch and parse events from an iCal URL within a date range."""
+    import requests as req
+    from icalendar import Calendar
+    try:
+        r = req.get(ical_url, timeout=15)
+        r.raise_for_status()
+        cal = Calendar.from_ical(r.content)
+    except Exception as e:
+        return [], str(e)
+
+    events = []
+    for comp in cal.walk():
+        if comp.name != 'VEVENT':
+            continue
+        dtstart = comp.get('dtstart')
+        if not dtstart:
+            continue
+        dt = dtstart.dt
+        # Handle all-day events (date) vs timed events (datetime)
+        if hasattr(dt, 'date'):
+            event_date = dt.date()
+            event_time = dt.strftime('%H:%M') if hasattr(dt, 'hour') else '00:00'
+        else:
+            event_date = dt
+            event_time = '00:00'
+
+        if event_date < start_date or event_date > end_date:
+            continue
+
+        dtend = comp.get('dtend')
+        end_time = ''
+        if dtend and hasattr(dtend.dt, 'strftime'):
+            end_time = dtend.dt.strftime('%H:%M')
+
+        summary = str(comp.get('summary', 'Untitled Event'))
+        description = str(comp.get('description', '')) if comp.get('description') else ''
+        uid = str(comp.get('uid', ''))
+        location = str(comp.get('location', '')) if comp.get('location') else ''
+
+        attendees_raw = comp.get('attendee', [])
+        if not isinstance(attendees_raw, list):
+            attendees_raw = [attendees_raw]
+        attendees = []
+        for a in attendees_raw:
+            email = str(a).replace('mailto:', '').strip() if a else ''
+            if email:
+                attendees.append(email)
+
+        events.append({
+            'uid': uid,
+            'title': summary,
+            'date': event_date.isoformat(),
+            'startTime': event_time,
+            'endTime': end_time,
+            'description': description,
+            'location': location,
+            'attendees': attendees[:20]
+        })
+
+    events.sort(key=lambda e: e['startTime'])
+    return events, None
+
+@app.route('/api/calendar/settings', methods=['GET'])
+@login_required
+def api_cal_settings_get():
+    sync = load_calendar_sync()
+    if not isinstance(sync, dict):
+        sync = {}
+    return jsonify({
+        'icalUrl': sync.get('icalUrl', ''),
+        'autoSync': sync.get('autoSync', False),
+        'lastSynced': sync.get('lastSynced'),
+        'importedCount': len(sync.get('importedEventIds', []))
+    })
+
+@app.route('/api/calendar/settings', methods=['PUT'])
+@login_required
+def api_cal_settings_update():
+    d = request.json
+    sync = load_calendar_sync()
+    if not isinstance(sync, dict):
+        sync = {'importedEventIds': []}
+    if 'icalUrl' in d:
+        sync['icalUrl'] = d['icalUrl'].strip()
+    if 'autoSync' in d:
+        sync['autoSync'] = bool(d['autoSync'])
+    save_calendar_sync(sync)
+    return jsonify({'ok': True})
+
+@app.route('/api/calendar/today', methods=['GET'])
+@login_required
+def api_cal_today():
+    sync = load_calendar_sync()
+    if not isinstance(sync, dict) or not sync.get('icalUrl'):
+        return jsonify({'error': 'No calendar URL configured. Add it in Settings.'}), 400
+    today_d = date.today()
+    events, err = fetch_ical_events(sync['icalUrl'], today_d, today_d)
+    if err:
+        return jsonify({'error': 'Failed to fetch calendar: ' + err}), 500
+    return jsonify(events)
+
+@app.route('/api/calendar/week', methods=['GET'])
+@login_required
+def api_cal_week():
+    sync = load_calendar_sync()
+    if not isinstance(sync, dict) or not sync.get('icalUrl'):
+        return jsonify({'error': 'No calendar URL configured.'}), 400
+    today_d = date.today()
+    day_of_week = today_d.weekday()
+    start = today_d - timedelta(days=day_of_week)
+    end = start + timedelta(days=6)
+    events, err = fetch_ical_events(sync['icalUrl'], start, end)
+    if err:
+        return jsonify({'error': 'Failed to fetch calendar: ' + err}), 500
+    return jsonify(events)
+
+@app.route('/api/calendar/sync', methods=['POST'])
+@login_required
+def api_cal_sync():
+    sync = load_calendar_sync()
+    if not isinstance(sync, dict) or not sync.get('icalUrl'):
+        return jsonify({'error': 'No calendar URL configured.'}), 400
+
+    today_d = date.today()
+    end_d = today_d + timedelta(days=14)
+    events, err = fetch_ical_events(sync['icalUrl'], today_d, end_d)
+    if err:
+        return jsonify({'error': 'Failed to fetch: ' + err}), 500
+
+    imported_ids = sync.get('importedEventIds', [])
+    meetings = load_meetings()
+    created = 0
+
+    for ev in events:
+        if ev['uid'] in imported_ids:
+            continue
+        # Check if meeting with same title+date+time already exists
+        dup = any(m['title'] == ev['title'] and m.get('scheduledDate') == ev['date'] and m.get('scheduledTime') == ev['startTime'] for m in meetings)
+        if dup:
+            imported_ids.append(ev['uid'])
+            continue
+
+        m = {
+            'id': uuid.uuid4().hex[:8],
+            'title': ev['title'],
+            'scheduledDate': ev['date'],
+            'scheduledTime': ev['startTime'],
+            'notes': '',
+            'status': 'scheduled',
+            'transcript': '',
+            'summary': '',
+            'actions': [],
+            'prompts': [],
+            'createdAt': datetime.now().isoformat(),
+            'completedAt': '',
+            'isRecurring': False,
+            'recurringFrequency': None,
+            'recurringEndDate': None,
+            'recurringParentId': None,
+            'calendarUid': ev['uid'],
+            'calendarAttendees': ev['attendees'],
+            'calendarLocation': ev.get('location', '')
+        }
+        # Add attendees and description to notes
+        note_parts = []
+        if ev.get('description'):
+            note_parts.append(ev['description'][:500])
+        if ev.get('attendees'):
+            note_parts.append('Attendees: ' + ', '.join(ev['attendees'][:10]))
+        if ev.get('location'):
+            note_parts.append('Location: ' + ev['location'])
+        m['notes'] = '\n'.join(note_parts)
+
+        meetings.append(m)
+        imported_ids.append(ev['uid'])
+        created += 1
+
+    save_meetings(meetings)
+    sync['importedEventIds'] = imported_ids
+    sync['lastSynced'] = datetime.now().isoformat()
+    save_calendar_sync(sync)
+
+    return jsonify({'created': created, 'total_events': len(events), 'lastSynced': sync['lastSynced']})
+
 # ---- Documents ----
 ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'xls', 'csv', 'docx', 'txt'}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -1684,6 +1876,17 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
   <label>Anthropic API Key</label>
   <input type="password" id="apiKey" placeholder="sk-ant-...">
   <p style="font-size:12px;color:#888;margin-top:4px">Saved in your browser only.</p>
+  <div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee">
+    <label style="font-weight:600;font-size:13px;margin:0 0 4px">Google Calendar (iCal URL)</label>
+    <input type="text" id="icalUrl" placeholder="https://calendar.google.com/calendar/ical/...">
+    <p style="font-size:11px;color:#888;margin:2px 0 6px">In Google Calendar: Settings &gt; your calendar &gt; Secret address in iCal format</p>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <button class="btn btn-sm btn-blue" onclick="saveCalSettings()">Save URL</button>
+      <button class="btn btn-sm btn-start" onclick="syncCalendar()">Sync Now</button>
+      <label style="font-size:12px;margin:0;display:flex;align-items:center;gap:4px"><input type="checkbox" id="calAutoSync" onchange="saveCalSettings()"> Auto-sync on load</label>
+    </div>
+    <div id="calSyncStatus" style="font-size:12px;color:#888"></div>
+  </div>
   <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee"><a href="/logout" style="color:#dc3535;font-size:13px;font-weight:600;text-decoration:none">Sign Out</a></div>
 </div>
 
@@ -1701,9 +1904,10 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
     <div class="panel-title" id="todayLabel">Today's Meetings</div>
     <div id="todayList"><div class="empty">No meetings scheduled.</div></div>
     <div class="panel-actions">
-      <button class="btn btn-outline" onclick="showAddModal()">+ Add Meeting</button>
+      <button class="btn btn-outline" onclick="showAddModal()">+ Add</button>
       <button class="btn btn-gray" onclick="adHocMeeting()">Ad Hoc</button>
-      <button class="btn-assist" onclick="startAssistant()">&#127908; Assistant</button>
+      <button class="btn-assist" onclick="startAssistant()">&#127908;</button>
+      <button class="btn btn-sm" onclick="syncCalendar()" style="background:#4285f4;color:#fff;border:none;border-radius:6px;padding:8px 12px;font-size:13px" title="Sync Google Calendar">&#128197; Sync</button>
     </div>
   </div>
   <div class="right-panel">
@@ -2089,6 +2293,7 @@ function renderToday() {
       var freq = m.recurringFrequency || 'weekly';
       html += ' <span class="badge badge-scheduled" style="background:#e0e7ff;color:#3730a3">&#128257; ' + freq.charAt(0).toUpperCase()+freq.slice(1) + '</span>';
     }
+    if (m.calendarUid) html += ' <span class="badge badge-scheduled" style="background:#e8f0fe;color:#4285f4">&#128197; GCal</span>';
     html += '</h4>';
     html += '<div class="time">' + formatTime(m.scheduledTime);
     var linkedCount = allTasks.filter(function(t){return t.linkedMeetingId===m.id && !t.completed;}).length;
@@ -4029,11 +4234,56 @@ async function askClaudeAboutDoc(did, question) {
   }
 }
 
+// --- Calendar Sync ---
+async function loadCalSettings() {
+  try {
+    var res = await fetch('/api/calendar/settings');
+    var data = await res.json();
+    var urlInput = document.getElementById('icalUrl');
+    var autoCheck = document.getElementById('calAutoSync');
+    if (urlInput) urlInput.value = data.icalUrl || '';
+    if (autoCheck) autoCheck.checked = data.autoSync || false;
+    var status = document.getElementById('calSyncStatus');
+    if (status && data.lastSynced) status.textContent = 'Last synced: ' + new Date(data.lastSynced).toLocaleString() + ' (' + data.importedCount + ' events imported)';
+    return data;
+  } catch(e) { return {}; }
+}
+
+async function saveCalSettings() {
+  var url = document.getElementById('icalUrl').value.trim();
+  var auto = document.getElementById('calAutoSync').checked;
+  await fetch('/api/calendar/settings', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ icalUrl: url, autoSync: auto })
+  });
+}
+
+async function syncCalendar() {
+  var status = document.getElementById('calSyncStatus');
+  if (status) status.textContent = 'Syncing...';
+  try {
+    var res = await fetch('/api/calendar/sync', { method: 'POST' });
+    var data = await res.json();
+    if (data.error) {
+      if (status) status.textContent = 'Error: ' + data.error;
+      if (data.error.includes('No calendar URL')) alert('Add your Google Calendar iCal URL in Settings (gear icon).');
+      return;
+    }
+    if (status) status.textContent = 'Synced! ' + data.created + ' new meetings imported. Last: ' + new Date(data.lastSynced).toLocaleString();
+    await loadMeetings();
+    renderToday();
+  } catch(e) {
+    if (status) status.textContent = 'Sync failed: ' + e.message;
+  }
+}
+
 // --- Init ---
 async function init() {
   await loadMeetings();
   await loadWorkspace();
   deduplicateRecurring();
+  var calData = await loadCalSettings();
+  if (calData.autoSync && calData.icalUrl) syncCalendar();
 }
 init();
 </script>
