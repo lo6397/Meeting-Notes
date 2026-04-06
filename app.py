@@ -1670,6 +1670,16 @@ label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px}
 .doc-questions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .doc-questions button{font-size:11px;padding:4px 10px;border:1px solid #ddd;border-radius:12px;background:#fff;cursor:pointer;color:#555}
 .doc-questions button:hover{border-color:#1a4fa3;color:#1a4fa3;background:#f5f8ff}
+/* Task action popup */
+.task-popup{position:absolute;left:0;top:24px;background:#fff;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.15);z-index:60;width:220px;padding:6px 0;font-size:13px}
+.task-popup button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 14px;border:none;background:none;cursor:pointer;text-align:left;font-size:13px;color:#333}
+.task-popup button:hover{background:#f0f4ff}
+.task-popup .tp-icon{width:20px;text-align:center;flex-shrink:0}
+.task-popup hr{border:none;border-top:1px solid #eee;margin:4px 0}
+.task-popup-wrap{position:relative;display:inline-block}
+.tp-inline{padding:8px 14px}
+.tp-inline input{width:100%;padding:6px;font-size:13px;border:1px solid #ddd;border-radius:4px;margin-top:4px;box-sizing:border-box}
+.tp-inline button{display:inline;width:auto;padding:4px 10px;margin-top:6px;background:#1a4fa3;color:#fff;border-radius:4px;font-size:12px;font-weight:600}
 /* Assistant Mode */
 .assist-bar{position:fixed;bottom:0;left:0;right:0;background:#1a1a2e;color:#fff;padding:12px 20px;z-index:95;display:none;align-items:center;gap:12px;font-size:14px;box-shadow:0 -2px 12px rgba(0,0,0,.2)}
 .assist-bar.show{display:flex}
@@ -2918,7 +2928,41 @@ async function addManualTask() {
   renderWorkspace();
 }
 
-async function toggleWsTask(id) {
+var activeTaskPopup = null;
+function closeTaskPopup() {
+  if (activeTaskPopup) { activeTaskPopup.remove(); activeTaskPopup = null; }
+  document.removeEventListener('click', onDocClickPopup);
+  document.removeEventListener('keydown', onEscPopup);
+}
+function onDocClickPopup(e) {
+  if (activeTaskPopup && !activeTaskPopup.contains(e.target)) closeTaskPopup();
+}
+function onEscPopup(e) { if (e.key === 'Escape') closeTaskPopup(); }
+
+function showTaskPopup(id, cbEl) {
+  closeTaskPopup();
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (!t) return;
+  // If already completed, just uncomplete on click
+  if (t.completed) { taskAction_complete(id); return; }
+  var popup = document.createElement('div');
+  popup.className = 'task-popup';
+  popup.innerHTML = '<button onclick="taskAction_complete(\'' + id + '\')"><span class="tp-icon">&#9989;</span> Mark Complete</button>'
+    + '<button onclick="taskAction_reschedule(\'' + id + '\')"><span class="tp-icon">&#128197;</span> Reschedule</button>'
+    + '<button onclick="taskAction_delegate(\'' + id + '\')"><span class="tp-icon">&#128100;</span> Delegate - Waiting On</button>'
+    + '<button onclick="taskAction_backlog(\'' + id + '\')"><span class="tp-icon">&#128450;</span> Move to Backlog</button>'
+    + '<hr><button onclick="closeTaskPopup()"><span class="tp-icon">&#10060;</span> Cancel</button>';
+  var wrap = cbEl.closest('.task-popup-wrap');
+  wrap.appendChild(popup);
+  activeTaskPopup = popup;
+  setTimeout(function() {
+    document.addEventListener('click', onDocClickPopup);
+    document.addEventListener('keydown', onEscPopup);
+  }, 10);
+}
+
+async function taskAction_complete(id) {
+  closeTaskPopup();
   var t = allTasks.find(function(x){return x.id===id;});
   if (!t) return;
   var now = t.completed ? null : new Date().toISOString();
@@ -2928,6 +2972,51 @@ async function toggleWsTask(id) {
   t.completedAt = now;
   renderWorkspace();
 }
+
+function taskAction_reschedule(id) {
+  var popup = activeTaskPopup;
+  if (!popup) return;
+  popup.innerHTML = '<div class="tp-inline"><strong>Reschedule to:</strong><input type="date" id="tp-date-'+id+'" value="'+today()+'"><button onclick="taskAction_reschedule_save(\''+id+'\')">Save</button></div>';
+}
+async function taskAction_reschedule_save(id) {
+  var dateVal = document.getElementById('tp-date-'+id).value;
+  closeTaskPopup();
+  if (!dateVal) return;
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ zone:'upcoming', dueDate:dateVal }) });
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (t) { t.zone = 'upcoming'; t.dueDate = dateVal; }
+  renderWorkspace();
+}
+
+function taskAction_delegate(id) {
+  var popup = activeTaskPopup;
+  if (!popup) return;
+  popup.innerHTML = '<div class="tp-inline"><strong>Waiting for:</strong><input type="text" id="tp-who-'+id+'" placeholder="Name or what you\'re waiting for"><button onclick="taskAction_delegate_save(\''+id+'\')">Save</button></div>';
+  document.getElementById('tp-who-'+id).focus();
+}
+async function taskAction_delegate_save(id) {
+  var who = document.getElementById('tp-who-'+id).value.trim();
+  closeTaskPopup();
+  if (!who) return;
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ zone:'waiting', waitingFor:who, waitingSince:new Date().toISOString() }) });
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (t) { t.zone = 'waiting'; t.waitingFor = who; t.waitingSince = new Date().toISOString(); }
+  renderWorkspace();
+}
+
+async function taskAction_backlog(id) {
+  closeTaskPopup();
+  await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ zone:'backlog' }) });
+  var t = allTasks.find(function(x){return x.id===id;});
+  if (t) t.zone = 'backlog';
+  renderWorkspace();
+}
+
+// Legacy wrapper for linked tasks view
+async function toggleWsTask(id) { taskAction_complete(id); }
 
 async function updateWsPriority(id, val) {
   await fetch('/api/workspace/'+id, { method:'PUT', headers:{'Content-Type':'application/json'},
@@ -3102,7 +3191,7 @@ function renderZoneTask(t, showTriageButtons) {
   var todayStr = today();
   var cls = 'zone-task' + (t.completed ? ' done' : '');
   var html = '<div class="' + cls + '">';
-  html += '<input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onchange="toggleWsTask(\'' + t.id + '\')">';
+  html += '<div class="task-popup-wrap"><input type="checkbox" ' + (t.completed ? 'checked' : '') + ' onclick="event.preventDefault();showTaskPopup(\'' + t.id + '\',this)"></div>';
   html += '<div class="zone-task-body">';
   html += '<div class="zone-task-text">' + escHtml(t.text) + '</div>';
   html += '<div class="zone-task-meta">';
